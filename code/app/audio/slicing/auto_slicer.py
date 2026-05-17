@@ -54,10 +54,19 @@ class SlicerConfig:
     drum_loop_bars: int = 2
     bass_loop_bars: int = 2
     melody_phrase_bars: int = 4
-    vocal_phrase_bars: int = 4
-    vocal_chop_length_ms: int = 1500
-    max_vocal_chops: int = 8
-    vocal_chop_min_spacing_beats: float = 2.0
+
+    # Vocal phrases — natural-length, detected by silence-gating
+    max_vocal_phrases: int = 6           # cap full-phrase samples
+    min_vocal_phrase_ms: float = 1500.0  # ignore anything shorter than this
+    max_vocal_phrase_ms: float = 12000.0 # cap phrase length
+    # Pauses inside a phrase shorter than this don't split it.
+    # Higher = longer, more musical phrases (good for full vocal lines)
+    # Lower  = more atomic phrases (good for chops)
+    vocal_phrase_min_gap_ms: float = 700.0
+
+    # Vocal chops — short percussive cuts from the START of each phrase
+    vocal_chop_length_ms: int = 1200
+    max_vocal_chops: int = 6
 
     # Sample shape
     default_fade_in_samples: int = 64
@@ -147,52 +156,164 @@ class AutoSlicer:
                       beats: list[int], bpm: float,
                       audio: Optional[np.ndarray], zc_window: int,
                       samples_per_beat: int) -> list[Sample]:
-        out: list[Sample] = []
+        """
+        Vocal slicing uses PHRASE DETECTION instead of fixed-length cuts.
 
-        # Vocal chops: distributed across the track
-        chop_positions = self._vocal_onsets(stem)
-        chop_len = int(self.cfg.vocal_chop_length_ms / 1000 * stem.sample_rate)
-        min_spacing = int(self.cfg.vocal_chop_min_spacing_beats * samples_per_beat)
-        # Convert positions to Transient-like objects for the spacer
-        pseudo_transients = [Transient(position=p, strength=1.0) for p in chop_positions]
-        picked = self._pick_spaced_transients(
-            pseudo_transients, max_n=self.cfg.max_vocal_chops, min_spacing=min_spacing,
+        Each "phrase" is a contiguous span of singing bracketed by silence
+        in the vocal stem. We turn each detected phrase into:
+          - a VOCAL_PHRASE sample covering the whole phrase (natural length)
+          - optionally a shorter VOCAL_CHOP cut from the start of the phrase
+            (useful for percussive playable bits)
+        """
+        out: list[Sample] = []
+        if stem.path is None:
+            return out
+
+        from app.audio.analysis.vocal_phrase import (
+            PhraseDetectionConfig, detect_vocal_phrases,
         )
-        picked.sort(key=lambda t: t.position)
-        for i, t in enumerate(picked):
-            start = self._snap(audio, t.position, zc_window, "backward")
-            end = min(t.position + chop_len, stem.duration_samples)
-            end = self._snap(audio, end, zc_window, "nearest")
+        phrase_cfg = PhraseDetectionConfig(
+            max_phrases=self.cfg.max_vocal_phrases,
+            min_phrase_ms=self.cfg.min_vocal_phrase_ms,
+            max_phrase_ms=self.cfg.max_vocal_phrase_ms,
+            min_gap_ms=self.cfg.vocal_phrase_min_gap_ms,
+        )
+        phrases = detect_vocal_phrases(stem.path, phrase_cfg)
+
+        # If first pass found nothing, try a more aggressive config:
+        # higher noise floor (handles stems with bleed) + shorter min phrase.
+        # This commonly happens with the heuristic separator's vocal stem.
+        if not phrases:
+            log.info("Retrying vocal phrase detection with relaxed thresholds")
+            # Don't go below the user's configured minimum entirely, but allow
+            # somewhat shorter phrases in the fallback (60% of the user's min).
+            relaxed_min = max(400.0, self.cfg.min_vocal_phrase_ms * 0.6)
+            relaxed = PhraseDetectionConfig(
+                noise_floor_percentile=60.0,   # much higher floor
+                threshold_multiplier=1.15,
+                min_phrase_ms=relaxed_min,
+                min_gap_ms=self.cfg.vocal_phrase_min_gap_ms,
+                max_phrases=self.cfg.max_vocal_phrases * 2,  # find more, we'll merge
+                max_phrase_ms=self.cfg.max_vocal_phrase_ms,
+            )
+            phrases = detect_vocal_phrases(stem.path, relaxed)
+
+        # Merge adjacent phrases together until each reaches the requested
+        # minimum duration. Done in sample-domain: we merge phrase[i] with
+        # phrase[i+1] (including the gap between them) when phrase[i] is too
+        # short. This produces longer, more musically satisfying samples
+        # without padding silence into the middle.
+        if phrases and self.cfg.min_vocal_phrase_ms > 0:
+            min_len_samples = int(self.cfg.min_vocal_phrase_ms / 1000 * stem.sample_rate)
+            max_len_samples = int(self.cfg.max_vocal_phrase_ms / 1000 * stem.sample_rate)
+            phrases = self._merge_phrases_to_min_length(
+                phrases, min_len_samples, max_len_samples,
+            )
+            # Cap to max_vocal_phrases AFTER merging
+            phrases = phrases[: self.cfg.max_vocal_phrases]
+
+        if not phrases:
+            # Last resort: fall back to bar-aligned phrases (old behavior).
+            # Still better than nothing — the user gets *something* on vocal pads.
+            log.warning("Vocal phrase detection failed entirely; "
+                        "falling back to bar-aligned phrases")
+            return self._slice_distributed_loops(
+                stem, beats, 4,  # 4 bars
+                SampleCategory.VOCAL_PHRASE, "Vocal phrase (bar-aligned)",
+                audio, zc_window, bpm,
+            )
+
+        # 1) Full vocal phrases (natural-length, snapped to zero crossings)
+        for i, (s, e) in enumerate(phrases):
+            s = max(0, min(s, stem.duration_samples))
+            e = max(0, min(e, stem.duration_samples))
+            if e <= s:
+                continue
+            # Snap start backward so we don't clip the consonant attack
+            s_snap = self._snap(audio, s, zc_window, "backward")
+            e_snap = self._snap(audio, e, zc_window, "nearest")
+            pos_pct = int(100 * s / max(1, stem.duration_samples))
+            dur_s = (e_snap - s_snap) / max(1, stem.sample_rate)
             out.append(self._mk_sample(
-                stem, start, end,
-                name=f"Vocal chop {i+1:02d}",
+                stem, s_snap, e_snap,
+                name=f"Vocal phrase {i+1} ({pos_pct}%, {dur_s:.1f}s)",
+                category=SampleCategory.VOCAL_PHRASE,
+                bpm=bpm,
+            ))
+
+        # 2) Vocal chops: short percussive bits cut from the START of phrases.
+        #    These give the user playable one-shots that begin on a clean
+        #    word/consonant rather than mid-phrase.
+        chop_len = int(self.cfg.vocal_chop_length_ms / 1000 * stem.sample_rate)
+        n_chops = min(self.cfg.max_vocal_chops, len(phrases))
+        # Pick chops from phrases distributed across the track
+        if n_chops == 1:
+            chop_indices = [0]
+        elif n_chops > 0:
+            raw = np.linspace(0, len(phrases) - 1, n_chops)
+            chop_indices = sorted(set(int(round(x)) for x in raw))
+        else:
+            chop_indices = []
+
+        for i, idx in enumerate(chop_indices):
+            phrase_start, phrase_end = phrases[idx]
+            # Chop length is min(configured chop_len, length of the phrase itself)
+            chop_end = min(phrase_start + chop_len, phrase_end,
+                           stem.duration_samples)
+            if chop_end <= phrase_start:
+                continue
+            s_snap = self._snap(audio, phrase_start, zc_window, "backward")
+            e_snap = self._snap(audio, chop_end, zc_window, "nearest")
+            pos_pct = int(100 * phrase_start / max(1, stem.duration_samples))
+            out.append(self._mk_sample(
+                stem, s_snap, e_snap,
+                name=f"Vocal chop {i+1:02d} ({pos_pct}%)",
                 category=SampleCategory.VOCAL_CHOP,
             ))
 
-        # Vocal phrases: distributed loops
-        out.extend(self._slice_distributed_loops(
-            stem, beats, self.cfg.vocal_phrase_bars,
-            SampleCategory.VOCAL_PHRASE, "Vocal phrase",
-            audio, zc_window, bpm,
-        ))
         return out
 
-    def _vocal_onsets(self, stem: Stem) -> list[int]:
-        """Detect onsets in vocal stem with energy gate (skip silent segments)."""
-        try:
-            import librosa
-            y, sr = librosa.load(str(stem.path), sr=None, mono=True)
-            rms = librosa.feature.rms(y=y, hop_length=512)[0]
-            gate = rms.mean() * 0.6
-            onset_frames = librosa.onset.onset_detect(
-                y=y, sr=sr, hop_length=512, backtrack=True, units="frames"
-            )
-            keep = [f for f in onset_frames
-                    if f < len(rms) and rms[f] > gate]
-            return list(librosa.frames_to_samples(keep, hop_length=512))
-        except Exception as e:
-            log.warning("Vocal onset detection failed: %s", e)
+    # ---- Phrase merging -----------------------------------------------
+
+    def _merge_phrases_to_min_length(
+        self, phrases: list[tuple[int, int]],
+        min_len_samples: int, max_len_samples: int,
+    ) -> list[tuple[int, int]]:
+        """
+        Merge adjacent phrases (including the silence between them) so that
+        each result is at least min_len_samples long, without exceeding
+        max_len_samples.
+
+        We do a single forward pass: keep extending the current phrase by
+        absorbing the next one until length >= min_len, then commit and start
+        a new phrase from the next index.
+
+        This is what makes "1.5 second minimum" work even on material that
+        only has 0.7s natural phrases — we just stitch them together along
+        with the natural gap, which sounds more musical than padding silence.
+        """
+        if not phrases:
             return []
+        # Sort defensively
+        phrases = sorted(phrases, key=lambda p: p[0])
+        merged: list[tuple[int, int]] = []
+        i = 0
+        while i < len(phrases):
+            s, e = phrases[i]
+            j = i + 1
+            while (e - s) < min_len_samples and j < len(phrases):
+                next_s, next_e = phrases[j]
+                # Don't merge if absorbing the next one would exceed the max
+                if (next_e - s) > max_len_samples:
+                    break
+                e = next_e
+                j += 1
+            # Truncate if somehow still over max (shouldn't happen, but safe)
+            if (e - s) > max_len_samples:
+                e = s + max_len_samples
+            merged.append((s, e))
+            i = j
+        return merged
 
     # ---- Distributed bar-aligned loops --------------------------------
 
