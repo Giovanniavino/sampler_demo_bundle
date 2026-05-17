@@ -1,0 +1,1995 @@
+{
+  "schema_version": 1,
+  "project": {
+    "id": "02080eaa-e56d-4e1a-9b61-a6bb8b4ebda4",
+    "name": "test_song",
+    "version": 1,
+    "sources": [
+      {
+        "id": "6a4fecf8-1e32-4555-8b60-53104cf2e32e",
+        "path": "/home/claude/test_audio/test_song.wav",
+        "sample_rate": 44100,
+        "channels": 2,
+        "duration_samples": 1058400
+      }
+    ],
+    "stems": [
+      {
+        "id": "f401f90f-89a3-4405-9a45-9e0fa8ef60e5",
+        "source_id": "6a4fecf8-1e32-4555-8b60-53104cf2e32e",
+        "stem_type": "bass",
+        "path": "/home/claude/test_audio/cache/6a4fecf8-1e32-4555-8b60-53104cf2e32e/bass.wav",
+        "sample_rate": 44100,
+        "channels": 2,
+        "duration_samples": 1058400
+      },
+      {
+        "id": "fc9d4850-4d13-4e9b-8049-c5278f74bdfd",
+        "source_id": "6a4fecf8-1e32-4555-8b60-53104cf2e32e",
+        "stem_type": "drums",
+        "path": "/home/claude/test_audio/cache/6a4fecf8-1e32-4555-8b60-53104cf2e32e/drums.wav",
+        "sample_rate": 44100,
+        "channels": 2,
+        "duration_samples": 1058400
+      },
+      {
+        "id": "49769ab2-0b60-4d24-909d-c1c8acea8ab0",
+        "source_id": "6a4fecf8-1e32-4555-8b60-53104cf2e32e",
+        "stem_type": "vocals",
+        "path": "/home/claude/test_audio/cache/6a4fecf8-1e32-4555-8b60-53104cf2e32e/vocals.wav",
+        "sample_rate": 44100,
+        "channels": 2,
+        "duration_samples": 1058400
+      },
+      {
+        "id": "97601029-904e-41ac-bad9-8d58d59065cd",
+        "source_id": "6a4fecf8-1e32-4555-8b60-53104cf2e32e",
+        "stem_type": "other",
+        "path": "/home/claude/test_audio/cache/6a4fecf8-1e32-4555-8b60-53104cf2e32e/other.wav",
+        "sample_rate": 44100,
+        "channels": 2,
+        "duration_samples": 1058400
+      }
+    ],
+    "analyses": [
+      {
+        "source_id": "6a4fecf8-1e32-4555-8b60-53104cf2e32e",
+        "bpm": 120.18531976744185,
+        "bpm_confidence": 0.8,
+        "beats": [
+          {
+            "position": 22528,
+            "is_downbeat": true,
+            "confidence": 1.0
+          },
+          {
+            "position": 44544,
+            "is_downbeat": false,
+            "confidence": 1.0
+          },
+          {
+            "position": 66560,
+            "is_downbeat": false,
+            "confidence": 1.0
+          },
+          {
+            "position": 89088,
+            "is_downbeat": false,
+            "confidence": 1.0
+          },
+          {
+            "position": 111104,
+            "is_downbeat": true,
+            "confidence": 1.0
+          },
+          {
+            "position": 133120,
+            "is_downbeat": false,
+            "confidence": 1.0
+          },
+          {
+            "position": 155136,
+            "is_downbeat": false,
+            "confidence": 1.0
+          },
+          {
+            "position": 177152,
+            "is_downbeat": false,
+            "confidence": 1.0
+          },
+          {
+            "position": 199168,
+            "is_downbeat": true,
+            "confidence": 1.0
+          },
+          {
+            "position": 221184,
+            "is_downbeat": false,
+            "confidence": 1.0
+          },
+          {
+            "position": 243200,
+            "is_downbeat": false,
+            "confidence": 1.0
+          },
+          {
+            "position": 265216,
+            "is_downbeat": false,
+            "confidence": 1.0
+          },
+          {
+            "position": 287232,
+            "is_downbeat": true,
+            "confidence": 1.0
+          },
+          {
+            "position": 309248,
+            "is_downbeat": false,
+            "confidence": 1.0
+          },
+          {
+            "position": 331264,
+            "is_downbeat": false,
+            "confidence": 1.0
+          },
+          {
+            "position": 353280,
+            "is_downbeat": false,
+            "confidence": 1.0
+          },
+          {
+            "position": 375296,
+            "is_downbeat": true,
+            "confidence": 1.0
+          },
+          {
+            "position": 397824,
+            "is_downbeat": false,
+            "confidence": 1.0
+          },
+          {
+            "position": 419840,
+            "is_downbeat": false,
+            "confidence": 1.0
+          },
+          {
+            "position": 441856,
+            "is_downbeat": false,
+            "confidence": 1.0
+          },
+          {
+            "position": 463872,
+            "is_downbeat": true,
+            "confidence": 1.0
+          },
+          {
+            "position": 485888,
+            "is_downbeat": false,
+            "confidence": 1.0
+          },
+          {
+            "position": 507904,
+            "is_downbeat": false,
+            "confidence": 1.0
+          },
+          {
+            "position": 529920,
+            "is_downbeat": false,
+            "confidence": 1.0
+          },
+          {
+            "position": 551936,
+            "is_downbeat": true,
+            "confidence": 1.0
+          },
+          {
+            "position": 573952,
+            "is_downbeat": false,
+            "confidence": 1.0
+          },
+          {
+            "position": 595968,
+            "is_downbeat": false,
+            "confidence": 1.0
+          },
+          {
+            "position": 617984,
+            "is_downbeat": false,
+            "confidence": 1.0
+          },
+          {
+            "position": 640000,
+            "is_downbeat": true,
+            "confidence": 1.0
+          },
+          {
+            "position": 662016,
+            "is_downbeat": false,
+            "confidence": 1.0
+          },
+          {
+            "position": 684032,
+            "is_downbeat": false,
+            "confidence": 1.0
+          },
+          {
+            "position": 706048,
+            "is_downbeat": false,
+            "confidence": 1.0
+          },
+          {
+            "position": 728064,
+            "is_downbeat": true,
+            "confidence": 1.0
+          },
+          {
+            "position": 750592,
+            "is_downbeat": false,
+            "confidence": 1.0
+          },
+          {
+            "position": 772608,
+            "is_downbeat": false,
+            "confidence": 1.0
+          },
+          {
+            "position": 794624,
+            "is_downbeat": false,
+            "confidence": 1.0
+          },
+          {
+            "position": 816640,
+            "is_downbeat": true,
+            "confidence": 1.0
+          },
+          {
+            "position": 838656,
+            "is_downbeat": false,
+            "confidence": 1.0
+          },
+          {
+            "position": 860672,
+            "is_downbeat": false,
+            "confidence": 1.0
+          },
+          {
+            "position": 882688,
+            "is_downbeat": false,
+            "confidence": 1.0
+          },
+          {
+            "position": 904704,
+            "is_downbeat": true,
+            "confidence": 1.0
+          },
+          {
+            "position": 926720,
+            "is_downbeat": false,
+            "confidence": 1.0
+          },
+          {
+            "position": 948736,
+            "is_downbeat": false,
+            "confidence": 1.0
+          },
+          {
+            "position": 970752,
+            "is_downbeat": false,
+            "confidence": 1.0
+          },
+          {
+            "position": 992768,
+            "is_downbeat": true,
+            "confidence": 1.0
+          },
+          {
+            "position": 1014784,
+            "is_downbeat": false,
+            "confidence": 1.0
+          },
+          {
+            "position": 1036800,
+            "is_downbeat": false,
+            "confidence": 1.0
+          }
+        ],
+        "sections": [
+          {
+            "start": 0,
+            "end": 1040384,
+            "label": "intro",
+            "confidence": 1.0
+          },
+          {
+            "start": 1040384,
+            "end": 1058400,
+            "label": "outro",
+            "confidence": 1.0
+          }
+        ],
+        "transients": [
+          {
+            "position": 10240,
+            "strength": 0.01875487279356742
+          },
+          {
+            "position": 21504,
+            "strength": 0.001928681583377192
+          },
+          {
+            "position": 31744,
+            "strength": 0.017092295920244478
+          },
+          {
+            "position": 44032,
+            "strength": 0.0018213077124597538
+          },
+          {
+            "position": 53760,
+            "strength": 0.018837928480693756
+          },
+          {
+            "position": 65024,
+            "strength": 0.006021242535956743
+          },
+          {
+            "position": 76288,
+            "strength": 0.017236354564062393
+          },
+          {
+            "position": 88064,
+            "strength": 0.00011092176723072141
+          },
+          {
+            "position": 98816,
+            "strength": 0.01377113787215858
+          },
+          {
+            "position": 110080,
+            "strength": 0.02072736897446307
+          },
+          {
+            "position": 121344,
+            "strength": 0.00538091078595422
+          },
+          {
+            "position": 131584,
+            "strength": 0.005861960084757698
+          },
+          {
+            "position": 143360,
+            "strength": 0.02420540128189531
+          },
+          {
+            "position": 153600,
+            "strength": 0.013070893658196475
+          },
+          {
+            "position": 165376,
+            "strength": 0.006676149281993339
+          },
+          {
+            "position": 176128,
+            "strength": 4.838908476691163e-06
+          },
+          {
+            "position": 187392,
+            "strength": 0.021149639882574723
+          },
+          {
+            "position": 197120,
+            "strength": 0.000528429665551569
+          },
+          {
+            "position": 209408,
+            "strength": 0.016627760706482125
+          },
+          {
+            "position": 219136,
+            "strength": 0.000553984508253609
+          },
+          {
+            "position": 231424,
+            "strength": 0.021204911753978792
+          },
+          {
+            "position": 241664,
+            "strength": 0.008136092333417133
+          },
+          {
+            "position": 252928,
+            "strength": 0.012722023145029066
+          },
+          {
+            "position": 263680,
+            "strength": 1.498974562724852e-05
+          },
+          {
+            "position": 275456,
+            "strength": 0.013435227916526191
+          },
+          {
+            "position": 286720,
+            "strength": 0.01924399526420405
+          },
+          {
+            "position": 296448,
+            "strength": 0.008945506279138435
+          },
+          {
+            "position": 308224,
+            "strength": 0.0008823547863642571
+          },
+          {
+            "position": 318464,
+            "strength": 0.019228605948720803
+          },
+          {
+            "position": 329728,
+            "strength": 0.008217251043065357
+          },
+          {
+            "position": 341504,
+            "strength": 0.00964218276519514
+          },
+          {
+            "position": 352256,
+            "strength": 0.000371209210263812
+          },
+          {
+            "position": 363008,
+            "strength": 0.018742934664781573
+          },
+          {
+            "position": 374272,
+            "strength": 0.001522734034254074
+          },
+          {
+            "position": 384512,
+            "strength": 0.018657179922451483
+          },
+          {
+            "position": 396800,
+            "strength": 0.0018002372579209946
+          },
+          {
+            "position": 408064,
+            "strength": 0.022334436976614414
+          },
+          {
+            "position": 417792,
+            "strength": 0.00656404937129015
+          },
+          {
+            "position": 430080,
+            "strength": 0.027584884776902442
+          },
+          {
+            "position": 440832,
+            "strength": 6.487525867839089e-05
+          },
+          {
+            "position": 451584,
+            "strength": 0.013703805454733374
+          },
+          {
+            "position": 462848,
+            "strength": 0.02002557740664685
+          },
+          {
+            "position": 474112,
+            "strength": 0.005351185922549134
+          },
+          {
+            "position": 484352,
+            "strength": 0.006020396877695334
+          },
+          {
+            "position": 496128,
+            "strength": 0.024384032511635945
+          },
+          {
+            "position": 506368,
+            "strength": 0.013114940358793048
+          },
+          {
+            "position": 518144,
+            "strength": 0.007054836716326775
+          },
+          {
+            "position": 528384,
+            "strength": 0.0
+          },
+          {
+            "position": 540160,
+            "strength": 0.022612990050491215
+          },
+          {
+            "position": 549888,
+            "strength": 0.0005513887731964403
+          },
+          {
+            "position": 562176,
+            "strength": 0.016963326914517813
+          },
+          {
+            "position": 571904,
+            "strength": 0.0007181391654173449
+          },
+          {
+            "position": 584192,
+            "strength": 0.022892289379834365
+          },
+          {
+            "position": 594432,
+            "strength": 0.007488323981204986
+          },
+          {
+            "position": 605696,
+            "strength": 0.01339545308777243
+          },
+          {
+            "position": 616448,
+            "strength": 0.0
+          },
+          {
+            "position": 628224,
+            "strength": 0.01405829736734547
+          },
+          {
+            "position": 639488,
+            "strength": 0.01783562120765116
+          },
+          {
+            "position": 649216,
+            "strength": 0.00869072957036933
+          },
+          {
+            "position": 660992,
+            "strength": 0.0006219821409354021
+          },
+          {
+            "position": 671232,
+            "strength": 0.019251679149228967
+          },
+          {
+            "position": 682496,
+            "strength": 0.008672905620910559
+          },
+          {
+            "position": 694272,
+            "strength": 0.00983705729305243
+          },
+          {
+            "position": 705024,
+            "strength": 0.00046470121153340996
+          },
+          {
+            "position": 715776,
+            "strength": 0.018951516005640233
+          },
+          {
+            "position": 727040,
+            "strength": 0.0010712857126135649
+          },
+          {
+            "position": 737280,
+            "strength": 0.020904734899659706
+          },
+          {
+            "position": 749568,
+            "strength": 0.002085626599885538
+          },
+          {
+            "position": 760832,
+            "strength": 0.015973557125045057
+          },
+          {
+            "position": 771072,
+            "strength": 0.0073386997602016765
+          },
+          {
+            "position": 782848,
+            "strength": 0.025349548019114418
+          },
+          {
+            "position": 793600,
+            "strength": 0.0
+          },
+          {
+            "position": 804352,
+            "strength": 0.01385596224350044
+          },
+          {
+            "position": 815616,
+            "strength": 0.019661888531981603
+          },
+          {
+            "position": 826880,
+            "strength": 0.005309724184293025
+          },
+          {
+            "position": 836608,
+            "strength": 0.005990608357327895
+          },
+          {
+            "position": 848896,
+            "strength": 0.024908620724343994
+          },
+          {
+            "position": 859136,
+            "strength": 0.013995653040363074
+          },
+          {
+            "position": 870912,
+            "strength": 0.007707002785299615
+          },
+          {
+            "position": 881664,
+            "strength": 0.0
+          },
+          {
+            "position": 892416,
+            "strength": 0.02302853878337842
+          },
+          {
+            "position": 902656,
+            "strength": 0.0006601099682055215
+          },
+          {
+            "position": 914944,
+            "strength": 0.01735723032152932
+          },
+          {
+            "position": 924672,
+            "strength": 0.0009034622109080754
+          },
+          {
+            "position": 936448,
+            "strength": 0.023386392762940626
+          },
+          {
+            "position": 947200,
+            "strength": 0.0070545238178733646
+          },
+          {
+            "position": 958976,
+            "strength": 0.01390131636016995
+          },
+          {
+            "position": 969216,
+            "strength": 0.0
+          },
+          {
+            "position": 980992,
+            "strength": 0.014551767118841853
+          },
+          {
+            "position": 990720,
+            "strength": 0.009580859565016033
+          },
+          {
+            "position": 1001984,
+            "strength": 0.008385465055751433
+          },
+          {
+            "position": 1013760,
+            "strength": 0.0005983754461158268
+          },
+          {
+            "position": 1024000,
+            "strength": 0.019309996761447144
+          },
+          {
+            "position": 1035264,
+            "strength": 0.008693274869525557
+          },
+          {
+            "position": 1047040,
+            "strength": 0.01010030723317963
+          }
+        ],
+        "key": null,
+        "time_signature": [
+          4,
+          4
+        ]
+      }
+    ],
+    "samples": [
+      {
+        "id": "fb2dd5e5-d97c-4a45-9567-b1c323ef1075",
+        "name": "Bass loop 1",
+        "category": "bass_loop",
+        "source_stem_id": "f401f90f-89a3-4405-9a45-9e0fa8ef60e5",
+        "start_sample": 22528,
+        "end_sample": 199168,
+        "path": null,
+        "gain_db": 0.0,
+        "pitch_semitones": 0.0,
+        "time_stretch": 1.0,
+        "reverse": false,
+        "fade_in_samples": 64,
+        "fade_out_samples": 256,
+        "normalized": false,
+        "bpm": null,
+        "root_note": null,
+        "tags": []
+      },
+      {
+        "id": "8244cc1c-cf38-4548-ae18-c24a8d6fe1be",
+        "name": "Bass loop 2",
+        "category": "bass_loop",
+        "source_stem_id": "f401f90f-89a3-4405-9a45-9e0fa8ef60e5",
+        "start_sample": 199168,
+        "end_sample": 375296,
+        "path": null,
+        "gain_db": 0.0,
+        "pitch_semitones": 0.0,
+        "time_stretch": 1.0,
+        "reverse": false,
+        "fade_in_samples": 64,
+        "fade_out_samples": 256,
+        "normalized": false,
+        "bpm": null,
+        "root_note": null,
+        "tags": []
+      },
+      {
+        "id": "a67c8202-4ab4-4e63-b36b-efa2dc40dd30",
+        "name": "Bass loop 3",
+        "category": "bass_loop",
+        "source_stem_id": "f401f90f-89a3-4405-9a45-9e0fa8ef60e5",
+        "start_sample": 375296,
+        "end_sample": 551936,
+        "path": null,
+        "gain_db": 0.0,
+        "pitch_semitones": 0.0,
+        "time_stretch": 1.0,
+        "reverse": false,
+        "fade_in_samples": 64,
+        "fade_out_samples": 256,
+        "normalized": false,
+        "bpm": null,
+        "root_note": null,
+        "tags": []
+      },
+      {
+        "id": "ebf5c704-9d2b-4420-9c37-8d3d3f90a4a8",
+        "name": "Bass loop 4",
+        "category": "bass_loop",
+        "source_stem_id": "f401f90f-89a3-4405-9a45-9e0fa8ef60e5",
+        "start_sample": 551936,
+        "end_sample": 728064,
+        "path": null,
+        "gain_db": 0.0,
+        "pitch_semitones": 0.0,
+        "time_stretch": 1.0,
+        "reverse": false,
+        "fade_in_samples": 64,
+        "fade_out_samples": 256,
+        "normalized": false,
+        "bpm": null,
+        "root_note": null,
+        "tags": []
+      },
+      {
+        "id": "0c359c5d-2486-4516-aa15-70abd2ec53e0",
+        "name": "Drum hit 01",
+        "category": "drum_hit",
+        "source_stem_id": "fc9d4850-4d13-4e9b-8049-c5278f74bdfd",
+        "start_sample": 10240,
+        "end_sample": 27880,
+        "path": null,
+        "gain_db": 0.0,
+        "pitch_semitones": 0.0,
+        "time_stretch": 1.0,
+        "reverse": false,
+        "fade_in_samples": 64,
+        "fade_out_samples": 256,
+        "normalized": false,
+        "bpm": null,
+        "root_note": null,
+        "tags": []
+      },
+      {
+        "id": "a8773f1a-dcb5-457f-b9c0-d17b60980cf7",
+        "name": "Drum hit 02",
+        "category": "drum_hit",
+        "source_stem_id": "fc9d4850-4d13-4e9b-8049-c5278f74bdfd",
+        "start_sample": 31744,
+        "end_sample": 49384,
+        "path": null,
+        "gain_db": 0.0,
+        "pitch_semitones": 0.0,
+        "time_stretch": 1.0,
+        "reverse": false,
+        "fade_in_samples": 64,
+        "fade_out_samples": 256,
+        "normalized": false,
+        "bpm": null,
+        "root_note": null,
+        "tags": []
+      },
+      {
+        "id": "42a82a94-1b83-4d9a-8d08-772836916d9d",
+        "name": "Drum hit 03",
+        "category": "drum_hit",
+        "source_stem_id": "fc9d4850-4d13-4e9b-8049-c5278f74bdfd",
+        "start_sample": 53760,
+        "end_sample": 71400,
+        "path": null,
+        "gain_db": 0.0,
+        "pitch_semitones": 0.0,
+        "time_stretch": 1.0,
+        "reverse": false,
+        "fade_in_samples": 64,
+        "fade_out_samples": 256,
+        "normalized": false,
+        "bpm": null,
+        "root_note": null,
+        "tags": []
+      },
+      {
+        "id": "029a1e54-62ce-4754-8292-67b8fd8d528a",
+        "name": "Drum hit 04",
+        "category": "drum_hit",
+        "source_stem_id": "fc9d4850-4d13-4e9b-8049-c5278f74bdfd",
+        "start_sample": 76288,
+        "end_sample": 93928,
+        "path": null,
+        "gain_db": 0.0,
+        "pitch_semitones": 0.0,
+        "time_stretch": 1.0,
+        "reverse": false,
+        "fade_in_samples": 64,
+        "fade_out_samples": 256,
+        "normalized": false,
+        "bpm": null,
+        "root_note": null,
+        "tags": []
+      },
+      {
+        "id": "1280a5b3-cacf-4418-9003-069f01e457f4",
+        "name": "Drum hit 05",
+        "category": "drum_hit",
+        "source_stem_id": "fc9d4850-4d13-4e9b-8049-c5278f74bdfd",
+        "start_sample": 110080,
+        "end_sample": 127720,
+        "path": null,
+        "gain_db": 0.0,
+        "pitch_semitones": 0.0,
+        "time_stretch": 1.0,
+        "reverse": false,
+        "fade_in_samples": 64,
+        "fade_out_samples": 256,
+        "normalized": false,
+        "bpm": null,
+        "root_note": null,
+        "tags": []
+      },
+      {
+        "id": "2775ca8a-adce-45d9-b8db-9fc40b287b42",
+        "name": "Drum hit 06",
+        "category": "drum_hit",
+        "source_stem_id": "fc9d4850-4d13-4e9b-8049-c5278f74bdfd",
+        "start_sample": 143360,
+        "end_sample": 161000,
+        "path": null,
+        "gain_db": 0.0,
+        "pitch_semitones": 0.0,
+        "time_stretch": 1.0,
+        "reverse": false,
+        "fade_in_samples": 64,
+        "fade_out_samples": 256,
+        "normalized": false,
+        "bpm": null,
+        "root_note": null,
+        "tags": []
+      },
+      {
+        "id": "bcd2effa-15b5-4fb9-924d-4629e8b3975e",
+        "name": "Drum hit 07",
+        "category": "drum_hit",
+        "source_stem_id": "fc9d4850-4d13-4e9b-8049-c5278f74bdfd",
+        "start_sample": 187392,
+        "end_sample": 205032,
+        "path": null,
+        "gain_db": 0.0,
+        "pitch_semitones": 0.0,
+        "time_stretch": 1.0,
+        "reverse": false,
+        "fade_in_samples": 64,
+        "fade_out_samples": 256,
+        "normalized": false,
+        "bpm": null,
+        "root_note": null,
+        "tags": []
+      },
+      {
+        "id": "88216c60-ebbb-49bd-857e-d36591d217da",
+        "name": "Drum hit 08",
+        "category": "drum_hit",
+        "source_stem_id": "fc9d4850-4d13-4e9b-8049-c5278f74bdfd",
+        "start_sample": 209408,
+        "end_sample": 227048,
+        "path": null,
+        "gain_db": 0.0,
+        "pitch_semitones": 0.0,
+        "time_stretch": 1.0,
+        "reverse": false,
+        "fade_in_samples": 64,
+        "fade_out_samples": 256,
+        "normalized": false,
+        "bpm": null,
+        "root_note": null,
+        "tags": []
+      },
+      {
+        "id": "7889617b-693d-4639-bfc8-ce43e5db0a54",
+        "name": "Drum hit 09",
+        "category": "drum_hit",
+        "source_stem_id": "fc9d4850-4d13-4e9b-8049-c5278f74bdfd",
+        "start_sample": 231424,
+        "end_sample": 249064,
+        "path": null,
+        "gain_db": 0.0,
+        "pitch_semitones": 0.0,
+        "time_stretch": 1.0,
+        "reverse": false,
+        "fade_in_samples": 64,
+        "fade_out_samples": 256,
+        "normalized": false,
+        "bpm": null,
+        "root_note": null,
+        "tags": []
+      },
+      {
+        "id": "921ddc2d-03cd-4e99-a415-d2454642e2de",
+        "name": "Drum hit 10",
+        "category": "drum_hit",
+        "source_stem_id": "fc9d4850-4d13-4e9b-8049-c5278f74bdfd",
+        "start_sample": 286720,
+        "end_sample": 304360,
+        "path": null,
+        "gain_db": 0.0,
+        "pitch_semitones": 0.0,
+        "time_stretch": 1.0,
+        "reverse": false,
+        "fade_in_samples": 64,
+        "fade_out_samples": 256,
+        "normalized": false,
+        "bpm": null,
+        "root_note": null,
+        "tags": []
+      },
+      {
+        "id": "25cbc79a-4e32-4a24-91ca-cb7af7464ebb",
+        "name": "Drum hit 11",
+        "category": "drum_hit",
+        "source_stem_id": "fc9d4850-4d13-4e9b-8049-c5278f74bdfd",
+        "start_sample": 318464,
+        "end_sample": 336104,
+        "path": null,
+        "gain_db": 0.0,
+        "pitch_semitones": 0.0,
+        "time_stretch": 1.0,
+        "reverse": false,
+        "fade_in_samples": 64,
+        "fade_out_samples": 256,
+        "normalized": false,
+        "bpm": null,
+        "root_note": null,
+        "tags": []
+      },
+      {
+        "id": "477401f2-8f84-4412-bcef-263f6dd51fe9",
+        "name": "Drum hit 12",
+        "category": "drum_hit",
+        "source_stem_id": "fc9d4850-4d13-4e9b-8049-c5278f74bdfd",
+        "start_sample": 363008,
+        "end_sample": 380648,
+        "path": null,
+        "gain_db": 0.0,
+        "pitch_semitones": 0.0,
+        "time_stretch": 1.0,
+        "reverse": false,
+        "fade_in_samples": 64,
+        "fade_out_samples": 256,
+        "normalized": false,
+        "bpm": null,
+        "root_note": null,
+        "tags": []
+      },
+      {
+        "id": "c7878bbd-3054-4f7b-9960-43bf4ff1c69e",
+        "name": "Drum hit 13",
+        "category": "drum_hit",
+        "source_stem_id": "fc9d4850-4d13-4e9b-8049-c5278f74bdfd",
+        "start_sample": 384512,
+        "end_sample": 402152,
+        "path": null,
+        "gain_db": 0.0,
+        "pitch_semitones": 0.0,
+        "time_stretch": 1.0,
+        "reverse": false,
+        "fade_in_samples": 64,
+        "fade_out_samples": 256,
+        "normalized": false,
+        "bpm": null,
+        "root_note": null,
+        "tags": []
+      },
+      {
+        "id": "a20ef0b2-21c2-42d5-b5ec-7515e2dc2101",
+        "name": "Drum hit 14",
+        "category": "drum_hit",
+        "source_stem_id": "fc9d4850-4d13-4e9b-8049-c5278f74bdfd",
+        "start_sample": 408064,
+        "end_sample": 425704,
+        "path": null,
+        "gain_db": 0.0,
+        "pitch_semitones": 0.0,
+        "time_stretch": 1.0,
+        "reverse": false,
+        "fade_in_samples": 64,
+        "fade_out_samples": 256,
+        "normalized": false,
+        "bpm": null,
+        "root_note": null,
+        "tags": []
+      },
+      {
+        "id": "ba721d0b-39b5-4281-9b6d-c57741816141",
+        "name": "Drum hit 15",
+        "category": "drum_hit",
+        "source_stem_id": "fc9d4850-4d13-4e9b-8049-c5278f74bdfd",
+        "start_sample": 430080,
+        "end_sample": 447720,
+        "path": null,
+        "gain_db": 0.0,
+        "pitch_semitones": 0.0,
+        "time_stretch": 1.0,
+        "reverse": false,
+        "fade_in_samples": 64,
+        "fade_out_samples": 256,
+        "normalized": false,
+        "bpm": null,
+        "root_note": null,
+        "tags": []
+      },
+      {
+        "id": "563a9dae-3383-4604-909c-5e0338c1a393",
+        "name": "Drum hit 16",
+        "category": "drum_hit",
+        "source_stem_id": "fc9d4850-4d13-4e9b-8049-c5278f74bdfd",
+        "start_sample": 462848,
+        "end_sample": 480488,
+        "path": null,
+        "gain_db": 0.0,
+        "pitch_semitones": 0.0,
+        "time_stretch": 1.0,
+        "reverse": false,
+        "fade_in_samples": 64,
+        "fade_out_samples": 256,
+        "normalized": false,
+        "bpm": null,
+        "root_note": null,
+        "tags": []
+      },
+      {
+        "id": "83a8c744-da24-4adf-98ab-b52452920c6a",
+        "name": "Drum hit 17",
+        "category": "drum_hit",
+        "source_stem_id": "fc9d4850-4d13-4e9b-8049-c5278f74bdfd",
+        "start_sample": 496128,
+        "end_sample": 513768,
+        "path": null,
+        "gain_db": 0.0,
+        "pitch_semitones": 0.0,
+        "time_stretch": 1.0,
+        "reverse": false,
+        "fade_in_samples": 64,
+        "fade_out_samples": 256,
+        "normalized": false,
+        "bpm": null,
+        "root_note": null,
+        "tags": []
+      },
+      {
+        "id": "b8611cf2-57a3-4a0f-b91f-59b88064848d",
+        "name": "Drum hit 18",
+        "category": "drum_hit",
+        "source_stem_id": "fc9d4850-4d13-4e9b-8049-c5278f74bdfd",
+        "start_sample": 540160,
+        "end_sample": 557800,
+        "path": null,
+        "gain_db": 0.0,
+        "pitch_semitones": 0.0,
+        "time_stretch": 1.0,
+        "reverse": false,
+        "fade_in_samples": 64,
+        "fade_out_samples": 256,
+        "normalized": false,
+        "bpm": null,
+        "root_note": null,
+        "tags": []
+      },
+      {
+        "id": "358bb305-8367-4c2f-9b19-9a25ffbafe40",
+        "name": "Drum hit 19",
+        "category": "drum_hit",
+        "source_stem_id": "fc9d4850-4d13-4e9b-8049-c5278f74bdfd",
+        "start_sample": 562176,
+        "end_sample": 579816,
+        "path": null,
+        "gain_db": 0.0,
+        "pitch_semitones": 0.0,
+        "time_stretch": 1.0,
+        "reverse": false,
+        "fade_in_samples": 64,
+        "fade_out_samples": 256,
+        "normalized": false,
+        "bpm": null,
+        "root_note": null,
+        "tags": []
+      },
+      {
+        "id": "1a492ca8-e3f6-4ee0-a1b5-63dde2e1f849",
+        "name": "Drum hit 20",
+        "category": "drum_hit",
+        "source_stem_id": "fc9d4850-4d13-4e9b-8049-c5278f74bdfd",
+        "start_sample": 584192,
+        "end_sample": 601832,
+        "path": null,
+        "gain_db": 0.0,
+        "pitch_semitones": 0.0,
+        "time_stretch": 1.0,
+        "reverse": false,
+        "fade_in_samples": 64,
+        "fade_out_samples": 256,
+        "normalized": false,
+        "bpm": null,
+        "root_note": null,
+        "tags": []
+      },
+      {
+        "id": "8265c79a-ed69-473d-9708-52e633e152d8",
+        "name": "Drum hit 21",
+        "category": "drum_hit",
+        "source_stem_id": "fc9d4850-4d13-4e9b-8049-c5278f74bdfd",
+        "start_sample": 639488,
+        "end_sample": 657128,
+        "path": null,
+        "gain_db": 0.0,
+        "pitch_semitones": 0.0,
+        "time_stretch": 1.0,
+        "reverse": false,
+        "fade_in_samples": 64,
+        "fade_out_samples": 256,
+        "normalized": false,
+        "bpm": null,
+        "root_note": null,
+        "tags": []
+      },
+      {
+        "id": "df7d8def-d7d6-43ac-8c91-84a473168ca3",
+        "name": "Drum hit 22",
+        "category": "drum_hit",
+        "source_stem_id": "fc9d4850-4d13-4e9b-8049-c5278f74bdfd",
+        "start_sample": 671232,
+        "end_sample": 688872,
+        "path": null,
+        "gain_db": 0.0,
+        "pitch_semitones": 0.0,
+        "time_stretch": 1.0,
+        "reverse": false,
+        "fade_in_samples": 64,
+        "fade_out_samples": 256,
+        "normalized": false,
+        "bpm": null,
+        "root_note": null,
+        "tags": []
+      },
+      {
+        "id": "40c21885-2a52-4459-a14e-be1c5924153b",
+        "name": "Drum hit 23",
+        "category": "drum_hit",
+        "source_stem_id": "fc9d4850-4d13-4e9b-8049-c5278f74bdfd",
+        "start_sample": 715776,
+        "end_sample": 733416,
+        "path": null,
+        "gain_db": 0.0,
+        "pitch_semitones": 0.0,
+        "time_stretch": 1.0,
+        "reverse": false,
+        "fade_in_samples": 64,
+        "fade_out_samples": 256,
+        "normalized": false,
+        "bpm": null,
+        "root_note": null,
+        "tags": []
+      },
+      {
+        "id": "00b4d230-5fda-4eeb-952e-218be68f44bb",
+        "name": "Drum hit 24",
+        "category": "drum_hit",
+        "source_stem_id": "fc9d4850-4d13-4e9b-8049-c5278f74bdfd",
+        "start_sample": 737280,
+        "end_sample": 754920,
+        "path": null,
+        "gain_db": 0.0,
+        "pitch_semitones": 0.0,
+        "time_stretch": 1.0,
+        "reverse": false,
+        "fade_in_samples": 64,
+        "fade_out_samples": 256,
+        "normalized": false,
+        "bpm": null,
+        "root_note": null,
+        "tags": []
+      },
+      {
+        "id": "5a18fbef-0c29-4451-906d-a82719f239f1",
+        "name": "Drum hit 25",
+        "category": "drum_hit",
+        "source_stem_id": "fc9d4850-4d13-4e9b-8049-c5278f74bdfd",
+        "start_sample": 760832,
+        "end_sample": 778472,
+        "path": null,
+        "gain_db": 0.0,
+        "pitch_semitones": 0.0,
+        "time_stretch": 1.0,
+        "reverse": false,
+        "fade_in_samples": 64,
+        "fade_out_samples": 256,
+        "normalized": false,
+        "bpm": null,
+        "root_note": null,
+        "tags": []
+      },
+      {
+        "id": "87ef7161-8309-4151-a6b6-7d9fb2ef4b7a",
+        "name": "Drum hit 26",
+        "category": "drum_hit",
+        "source_stem_id": "fc9d4850-4d13-4e9b-8049-c5278f74bdfd",
+        "start_sample": 782848,
+        "end_sample": 800488,
+        "path": null,
+        "gain_db": 0.0,
+        "pitch_semitones": 0.0,
+        "time_stretch": 1.0,
+        "reverse": false,
+        "fade_in_samples": 64,
+        "fade_out_samples": 256,
+        "normalized": false,
+        "bpm": null,
+        "root_note": null,
+        "tags": []
+      },
+      {
+        "id": "f8c01bab-3dfc-4b90-a625-43fe7eab9984",
+        "name": "Drum hit 27",
+        "category": "drum_hit",
+        "source_stem_id": "fc9d4850-4d13-4e9b-8049-c5278f74bdfd",
+        "start_sample": 815616,
+        "end_sample": 833256,
+        "path": null,
+        "gain_db": 0.0,
+        "pitch_semitones": 0.0,
+        "time_stretch": 1.0,
+        "reverse": false,
+        "fade_in_samples": 64,
+        "fade_out_samples": 256,
+        "normalized": false,
+        "bpm": null,
+        "root_note": null,
+        "tags": []
+      },
+      {
+        "id": "984c2d50-81ac-47bd-a3b4-205ce2316fed",
+        "name": "Drum hit 28",
+        "category": "drum_hit",
+        "source_stem_id": "fc9d4850-4d13-4e9b-8049-c5278f74bdfd",
+        "start_sample": 848896,
+        "end_sample": 866536,
+        "path": null,
+        "gain_db": 0.0,
+        "pitch_semitones": 0.0,
+        "time_stretch": 1.0,
+        "reverse": false,
+        "fade_in_samples": 64,
+        "fade_out_samples": 256,
+        "normalized": false,
+        "bpm": null,
+        "root_note": null,
+        "tags": []
+      },
+      {
+        "id": "70510bbe-fcc5-4978-9d32-2193453ef9d1",
+        "name": "Drum hit 29",
+        "category": "drum_hit",
+        "source_stem_id": "fc9d4850-4d13-4e9b-8049-c5278f74bdfd",
+        "start_sample": 892416,
+        "end_sample": 910056,
+        "path": null,
+        "gain_db": 0.0,
+        "pitch_semitones": 0.0,
+        "time_stretch": 1.0,
+        "reverse": false,
+        "fade_in_samples": 64,
+        "fade_out_samples": 256,
+        "normalized": false,
+        "bpm": null,
+        "root_note": null,
+        "tags": []
+      },
+      {
+        "id": "fa6223e9-82a1-40ad-a665-69d0b3b174c1",
+        "name": "Drum hit 30",
+        "category": "drum_hit",
+        "source_stem_id": "fc9d4850-4d13-4e9b-8049-c5278f74bdfd",
+        "start_sample": 914944,
+        "end_sample": 932584,
+        "path": null,
+        "gain_db": 0.0,
+        "pitch_semitones": 0.0,
+        "time_stretch": 1.0,
+        "reverse": false,
+        "fade_in_samples": 64,
+        "fade_out_samples": 256,
+        "normalized": false,
+        "bpm": null,
+        "root_note": null,
+        "tags": []
+      },
+      {
+        "id": "0abfe51f-766e-4e1a-8593-62551ca8c03e",
+        "name": "Drum hit 31",
+        "category": "drum_hit",
+        "source_stem_id": "fc9d4850-4d13-4e9b-8049-c5278f74bdfd",
+        "start_sample": 936448,
+        "end_sample": 954088,
+        "path": null,
+        "gain_db": 0.0,
+        "pitch_semitones": 0.0,
+        "time_stretch": 1.0,
+        "reverse": false,
+        "fade_in_samples": 64,
+        "fade_out_samples": 256,
+        "normalized": false,
+        "bpm": null,
+        "root_note": null,
+        "tags": []
+      },
+      {
+        "id": "008f2c26-f1bc-4b55-8845-49fa3662ac1d",
+        "name": "Drum hit 32",
+        "category": "drum_hit",
+        "source_stem_id": "fc9d4850-4d13-4e9b-8049-c5278f74bdfd",
+        "start_sample": 1024000,
+        "end_sample": 1041640,
+        "path": null,
+        "gain_db": 0.0,
+        "pitch_semitones": 0.0,
+        "time_stretch": 1.0,
+        "reverse": false,
+        "fade_in_samples": 64,
+        "fade_out_samples": 256,
+        "normalized": false,
+        "bpm": null,
+        "root_note": null,
+        "tags": []
+      },
+      {
+        "id": "5a009337-334a-4f95-96a3-2102d8461aa7",
+        "name": "Drum loop 1",
+        "category": "drum_loop",
+        "source_stem_id": "fc9d4850-4d13-4e9b-8049-c5278f74bdfd",
+        "start_sample": 22528,
+        "end_sample": 199168,
+        "path": null,
+        "gain_db": 0.0,
+        "pitch_semitones": 0.0,
+        "time_stretch": 1.0,
+        "reverse": false,
+        "fade_in_samples": 64,
+        "fade_out_samples": 256,
+        "normalized": false,
+        "bpm": 120.18531976744185,
+        "root_note": null,
+        "tags": []
+      },
+      {
+        "id": "9f07d8aa-744b-4389-b5f7-de38c7fa3cef",
+        "name": "Drum loop 2",
+        "category": "drum_loop",
+        "source_stem_id": "fc9d4850-4d13-4e9b-8049-c5278f74bdfd",
+        "start_sample": 199168,
+        "end_sample": 375296,
+        "path": null,
+        "gain_db": 0.0,
+        "pitch_semitones": 0.0,
+        "time_stretch": 1.0,
+        "reverse": false,
+        "fade_in_samples": 64,
+        "fade_out_samples": 256,
+        "normalized": false,
+        "bpm": 120.18531976744185,
+        "root_note": null,
+        "tags": []
+      },
+      {
+        "id": "ca553b52-22f4-40e5-8068-3418b5dac405",
+        "name": "Drum loop 3",
+        "category": "drum_loop",
+        "source_stem_id": "fc9d4850-4d13-4e9b-8049-c5278f74bdfd",
+        "start_sample": 375296,
+        "end_sample": 551936,
+        "path": null,
+        "gain_db": 0.0,
+        "pitch_semitones": 0.0,
+        "time_stretch": 1.0,
+        "reverse": false,
+        "fade_in_samples": 64,
+        "fade_out_samples": 256,
+        "normalized": false,
+        "bpm": 120.18531976744185,
+        "root_note": null,
+        "tags": []
+      },
+      {
+        "id": "683eadd1-e569-45cf-be08-5c42f160327a",
+        "name": "Drum loop 4",
+        "category": "drum_loop",
+        "source_stem_id": "fc9d4850-4d13-4e9b-8049-c5278f74bdfd",
+        "start_sample": 551936,
+        "end_sample": 728064,
+        "path": null,
+        "gain_db": 0.0,
+        "pitch_semitones": 0.0,
+        "time_stretch": 1.0,
+        "reverse": false,
+        "fade_in_samples": 64,
+        "fade_out_samples": 256,
+        "normalized": false,
+        "bpm": 120.18531976744185,
+        "root_note": null,
+        "tags": []
+      },
+      {
+        "id": "d390ec5a-13f5-4b04-a53a-842d8b82a47d",
+        "name": "Vocal chop 01",
+        "category": "vocal_chop",
+        "source_stem_id": "49769ab2-0b60-4d24-909d-c1c8acea8ab0",
+        "start_sample": 10752,
+        "end_sample": 76902,
+        "path": null,
+        "gain_db": 0.0,
+        "pitch_semitones": 0.0,
+        "time_stretch": 1.0,
+        "reverse": false,
+        "fade_in_samples": 64,
+        "fade_out_samples": 256,
+        "normalized": false,
+        "bpm": null,
+        "root_note": null,
+        "tags": []
+      },
+      {
+        "id": "5dbb5943-ecd8-439c-938a-9b360223558b",
+        "name": "Vocal chop 02",
+        "category": "vocal_chop",
+        "source_stem_id": "49769ab2-0b60-4d24-909d-c1c8acea8ab0",
+        "start_sample": 33280,
+        "end_sample": 99430,
+        "path": null,
+        "gain_db": 0.0,
+        "pitch_semitones": 0.0,
+        "time_stretch": 1.0,
+        "reverse": false,
+        "fade_in_samples": 64,
+        "fade_out_samples": 256,
+        "normalized": false,
+        "bpm": null,
+        "root_note": null,
+        "tags": []
+      },
+      {
+        "id": "44a99ff4-db4e-4a72-bfba-427b2311973d",
+        "name": "Vocal chop 03",
+        "category": "vocal_chop",
+        "source_stem_id": "49769ab2-0b60-4d24-909d-c1c8acea8ab0",
+        "start_sample": 54784,
+        "end_sample": 120934,
+        "path": null,
+        "gain_db": 0.0,
+        "pitch_semitones": 0.0,
+        "time_stretch": 1.0,
+        "reverse": false,
+        "fade_in_samples": 64,
+        "fade_out_samples": 256,
+        "normalized": false,
+        "bpm": null,
+        "root_note": null,
+        "tags": []
+      },
+      {
+        "id": "34d5ab9c-98ee-46aa-a926-7867da579dad",
+        "name": "Vocal chop 04",
+        "category": "vocal_chop",
+        "source_stem_id": "49769ab2-0b60-4d24-909d-c1c8acea8ab0",
+        "start_sample": 65024,
+        "end_sample": 131174,
+        "path": null,
+        "gain_db": 0.0,
+        "pitch_semitones": 0.0,
+        "time_stretch": 1.0,
+        "reverse": false,
+        "fade_in_samples": 64,
+        "fade_out_samples": 256,
+        "normalized": false,
+        "bpm": null,
+        "root_note": null,
+        "tags": []
+      },
+      {
+        "id": "5e787366-2b72-4176-9893-ca3c7909309f",
+        "name": "Vocal chop 05",
+        "category": "vocal_chop",
+        "source_stem_id": "49769ab2-0b60-4d24-909d-c1c8acea8ab0",
+        "start_sample": 77312,
+        "end_sample": 143462,
+        "path": null,
+        "gain_db": 0.0,
+        "pitch_semitones": 0.0,
+        "time_stretch": 1.0,
+        "reverse": false,
+        "fade_in_samples": 64,
+        "fade_out_samples": 256,
+        "normalized": false,
+        "bpm": null,
+        "root_note": null,
+        "tags": []
+      },
+      {
+        "id": "7798813a-d104-470b-8d8a-0e7def59be5a",
+        "name": "Vocal chop 06",
+        "category": "vocal_chop",
+        "source_stem_id": "49769ab2-0b60-4d24-909d-c1c8acea8ab0",
+        "start_sample": 98816,
+        "end_sample": 164966,
+        "path": null,
+        "gain_db": 0.0,
+        "pitch_semitones": 0.0,
+        "time_stretch": 1.0,
+        "reverse": false,
+        "fade_in_samples": 64,
+        "fade_out_samples": 256,
+        "normalized": false,
+        "bpm": null,
+        "root_note": null,
+        "tags": []
+      },
+      {
+        "id": "ee6edf06-92b4-46e6-a94e-d89d9b3ee2c4",
+        "name": "Vocal chop 07",
+        "category": "vocal_chop",
+        "source_stem_id": "49769ab2-0b60-4d24-909d-c1c8acea8ab0",
+        "start_sample": 109056,
+        "end_sample": 175206,
+        "path": null,
+        "gain_db": 0.0,
+        "pitch_semitones": 0.0,
+        "time_stretch": 1.0,
+        "reverse": false,
+        "fade_in_samples": 64,
+        "fade_out_samples": 256,
+        "normalized": false,
+        "bpm": null,
+        "root_note": null,
+        "tags": []
+      },
+      {
+        "id": "b0f7782b-0df7-4a1f-9354-8803f2e88aac",
+        "name": "Vocal chop 08",
+        "category": "vocal_chop",
+        "source_stem_id": "49769ab2-0b60-4d24-909d-c1c8acea8ab0",
+        "start_sample": 143360,
+        "end_sample": 209510,
+        "path": null,
+        "gain_db": 0.0,
+        "pitch_semitones": 0.0,
+        "time_stretch": 1.0,
+        "reverse": false,
+        "fade_in_samples": 64,
+        "fade_out_samples": 256,
+        "normalized": false,
+        "bpm": null,
+        "root_note": null,
+        "tags": []
+      },
+      {
+        "id": "ce962eb4-c9e6-4d1f-a68e-77c7a901796f",
+        "name": "Vocal chop 09",
+        "category": "vocal_chop",
+        "source_stem_id": "49769ab2-0b60-4d24-909d-c1c8acea8ab0",
+        "start_sample": 153088,
+        "end_sample": 219238,
+        "path": null,
+        "gain_db": 0.0,
+        "pitch_semitones": 0.0,
+        "time_stretch": 1.0,
+        "reverse": false,
+        "fade_in_samples": 64,
+        "fade_out_samples": 256,
+        "normalized": false,
+        "bpm": null,
+        "root_note": null,
+        "tags": []
+      },
+      {
+        "id": "7c849b58-4db7-4bf5-98f8-4254f8e51061",
+        "name": "Vocal chop 10",
+        "category": "vocal_chop",
+        "source_stem_id": "49769ab2-0b60-4d24-909d-c1c8acea8ab0",
+        "start_sample": 165376,
+        "end_sample": 231526,
+        "path": null,
+        "gain_db": 0.0,
+        "pitch_semitones": 0.0,
+        "time_stretch": 1.0,
+        "reverse": false,
+        "fade_in_samples": 64,
+        "fade_out_samples": 256,
+        "normalized": false,
+        "bpm": null,
+        "root_note": null,
+        "tags": []
+      },
+      {
+        "id": "260f847a-39bb-45f6-80de-26aff5dc1b4e",
+        "name": "Vocal chop 11",
+        "category": "vocal_chop",
+        "source_stem_id": "49769ab2-0b60-4d24-909d-c1c8acea8ab0",
+        "start_sample": 187392,
+        "end_sample": 253542,
+        "path": null,
+        "gain_db": 0.0,
+        "pitch_semitones": 0.0,
+        "time_stretch": 1.0,
+        "reverse": false,
+        "fade_in_samples": 64,
+        "fade_out_samples": 256,
+        "normalized": false,
+        "bpm": null,
+        "root_note": null,
+        "tags": []
+      },
+      {
+        "id": "74c1d905-e10c-44ea-b993-d070320c2da7",
+        "name": "Vocal chop 12",
+        "category": "vocal_chop",
+        "source_stem_id": "49769ab2-0b60-4d24-909d-c1c8acea8ab0",
+        "start_sample": 209408,
+        "end_sample": 275558,
+        "path": null,
+        "gain_db": 0.0,
+        "pitch_semitones": 0.0,
+        "time_stretch": 1.0,
+        "reverse": false,
+        "fade_in_samples": 64,
+        "fade_out_samples": 256,
+        "normalized": false,
+        "bpm": null,
+        "root_note": null,
+        "tags": []
+      },
+      {
+        "id": "3d1cada3-c91c-4cca-8577-ed7199b32695",
+        "name": "Vocal chop 13",
+        "category": "vocal_chop",
+        "source_stem_id": "49769ab2-0b60-4d24-909d-c1c8acea8ab0",
+        "start_sample": 231424,
+        "end_sample": 297574,
+        "path": null,
+        "gain_db": 0.0,
+        "pitch_semitones": 0.0,
+        "time_stretch": 1.0,
+        "reverse": false,
+        "fade_in_samples": 64,
+        "fade_out_samples": 256,
+        "normalized": false,
+        "bpm": null,
+        "root_note": null,
+        "tags": []
+      },
+      {
+        "id": "c7cb4fbc-9e9e-40f8-a9b1-0bd11f273b9b",
+        "name": "Vocal chop 14",
+        "category": "vocal_chop",
+        "source_stem_id": "49769ab2-0b60-4d24-909d-c1c8acea8ab0",
+        "start_sample": 241664,
+        "end_sample": 307814,
+        "path": null,
+        "gain_db": 0.0,
+        "pitch_semitones": 0.0,
+        "time_stretch": 1.0,
+        "reverse": false,
+        "fade_in_samples": 64,
+        "fade_out_samples": 256,
+        "normalized": false,
+        "bpm": null,
+        "root_note": null,
+        "tags": []
+      },
+      {
+        "id": "f92f0827-a332-433f-a04e-38d849dcb6ab",
+        "name": "Vocal chop 15",
+        "category": "vocal_chop",
+        "source_stem_id": "49769ab2-0b60-4d24-909d-c1c8acea8ab0",
+        "start_sample": 252928,
+        "end_sample": 319078,
+        "path": null,
+        "gain_db": 0.0,
+        "pitch_semitones": 0.0,
+        "time_stretch": 1.0,
+        "reverse": false,
+        "fade_in_samples": 64,
+        "fade_out_samples": 256,
+        "normalized": false,
+        "bpm": null,
+        "root_note": null,
+        "tags": []
+      },
+      {
+        "id": "2a336e1f-979c-412a-a01d-9b1dc2d16aa7",
+        "name": "Vocal chop 16",
+        "category": "vocal_chop",
+        "source_stem_id": "49769ab2-0b60-4d24-909d-c1c8acea8ab0",
+        "start_sample": 274432,
+        "end_sample": 340582,
+        "path": null,
+        "gain_db": 0.0,
+        "pitch_semitones": 0.0,
+        "time_stretch": 1.0,
+        "reverse": false,
+        "fade_in_samples": 64,
+        "fade_out_samples": 256,
+        "normalized": false,
+        "bpm": null,
+        "root_note": null,
+        "tags": []
+      },
+      {
+        "id": "a1c5c981-b5a8-4582-9f70-c82f22988c28",
+        "name": "Vocal phrase 1",
+        "category": "vocal_phrase",
+        "source_stem_id": "49769ab2-0b60-4d24-909d-c1c8acea8ab0",
+        "start_sample": 22528,
+        "end_sample": 375296,
+        "path": null,
+        "gain_db": 0.0,
+        "pitch_semitones": 0.0,
+        "time_stretch": 1.0,
+        "reverse": false,
+        "fade_in_samples": 64,
+        "fade_out_samples": 256,
+        "normalized": false,
+        "bpm": 120.18531976744185,
+        "root_note": null,
+        "tags": []
+      },
+      {
+        "id": "e721e9b1-8041-4cb6-ba58-dbe6598d3247",
+        "name": "Vocal phrase 2",
+        "category": "vocal_phrase",
+        "source_stem_id": "49769ab2-0b60-4d24-909d-c1c8acea8ab0",
+        "start_sample": 375296,
+        "end_sample": 728064,
+        "path": null,
+        "gain_db": 0.0,
+        "pitch_semitones": 0.0,
+        "time_stretch": 1.0,
+        "reverse": false,
+        "fade_in_samples": 64,
+        "fade_out_samples": 256,
+        "normalized": false,
+        "bpm": 120.18531976744185,
+        "root_note": null,
+        "tags": []
+      },
+      {
+        "id": "eb4dee7c-5af6-47ee-af06-ea2cee53c42e",
+        "name": "other phrase 1",
+        "category": "melodic_phrase",
+        "source_stem_id": "97601029-904e-41ac-bad9-8d58d59065cd",
+        "start_sample": 22528,
+        "end_sample": 375296,
+        "path": null,
+        "gain_db": 0.0,
+        "pitch_semitones": 0.0,
+        "time_stretch": 1.0,
+        "reverse": false,
+        "fade_in_samples": 64,
+        "fade_out_samples": 256,
+        "normalized": false,
+        "bpm": null,
+        "root_note": null,
+        "tags": []
+      },
+      {
+        "id": "f9a52e7d-8df2-4ec4-a135-c0d9cdce00e1",
+        "name": "other phrase 2",
+        "category": "melodic_phrase",
+        "source_stem_id": "97601029-904e-41ac-bad9-8d58d59065cd",
+        "start_sample": 375296,
+        "end_sample": 728064,
+        "path": null,
+        "gain_db": 0.0,
+        "pitch_semitones": 0.0,
+        "time_stretch": 1.0,
+        "reverse": false,
+        "fade_in_samples": 64,
+        "fade_out_samples": 256,
+        "normalized": false,
+        "bpm": null,
+        "root_note": null,
+        "tags": []
+      }
+    ],
+    "banks": [
+      {
+        "id": "8a51a0da-04ea-461c-aadc-c2585009ae8c",
+        "name": "Bank A",
+        "pads": [
+          {
+            "index": 0,
+            "sample_id": "0c359c5d-2486-4516-aa15-70abd2ec53e0",
+            "mode": "one_shot",
+            "color": "#E74C3C",
+            "label": "Drum hit 01",
+            "muted": false,
+            "group": 1
+          },
+          {
+            "index": 1,
+            "sample_id": "a8773f1a-dcb5-457f-b9c0-d17b60980cf7",
+            "mode": "one_shot",
+            "color": "#E74C3C",
+            "label": "Drum hit 02",
+            "muted": false,
+            "group": 1
+          },
+          {
+            "index": 2,
+            "sample_id": "42a82a94-1b83-4d9a-8d08-772836916d9d",
+            "mode": "one_shot",
+            "color": "#E74C3C",
+            "label": "Drum hit 03",
+            "muted": false,
+            "group": 1
+          },
+          {
+            "index": 3,
+            "sample_id": "029a1e54-62ce-4754-8292-67b8fd8d528a",
+            "mode": "one_shot",
+            "color": "#E74C3C",
+            "label": "Drum hit 04",
+            "muted": false,
+            "group": 1
+          },
+          {
+            "index": 4,
+            "sample_id": "d390ec5a-13f5-4b04-a53a-842d8b82a47d",
+            "mode": "one_shot",
+            "color": "#F1C40F",
+            "label": "Vocal chop 01",
+            "muted": false,
+            "group": 0
+          },
+          {
+            "index": 5,
+            "sample_id": "5dbb5943-ecd8-439c-938a-9b360223558b",
+            "mode": "one_shot",
+            "color": "#F1C40F",
+            "label": "Vocal chop 02",
+            "muted": false,
+            "group": 0
+          },
+          {
+            "index": 6,
+            "sample_id": "44a99ff4-db4e-4a72-bfba-427b2311973d",
+            "mode": "one_shot",
+            "color": "#F1C40F",
+            "label": "Vocal chop 03",
+            "muted": false,
+            "group": 0
+          },
+          {
+            "index": 7,
+            "sample_id": "34d5ab9c-98ee-46aa-a926-7867da579dad",
+            "mode": "one_shot",
+            "color": "#F1C40F",
+            "label": "Vocal chop 04",
+            "muted": false,
+            "group": 0
+          },
+          {
+            "index": 8,
+            "sample_id": "eb4dee7c-5af6-47ee-af06-ea2cee53c42e",
+            "mode": "loop",
+            "color": "#3498DB",
+            "label": "other phrase 1",
+            "muted": false,
+            "group": 0
+          },
+          {
+            "index": 9,
+            "sample_id": "f9a52e7d-8df2-4ec4-a135-c0d9cdce00e1",
+            "mode": "loop",
+            "color": "#3498DB",
+            "label": "other phrase 2",
+            "muted": false,
+            "group": 0
+          },
+          {
+            "index": 10,
+            "sample_id": null,
+            "mode": "one_shot",
+            "color": "#2C2C2C",
+            "label": "",
+            "muted": false,
+            "group": 0
+          },
+          {
+            "index": 11,
+            "sample_id": null,
+            "mode": "one_shot",
+            "color": "#2C2C2C",
+            "label": "",
+            "muted": false,
+            "group": 0
+          },
+          {
+            "index": 12,
+            "sample_id": "fb2dd5e5-d97c-4a45-9567-b1c323ef1075",
+            "mode": "loop",
+            "color": "#9B59B6",
+            "label": "Bass loop 1",
+            "muted": false,
+            "group": 0
+          },
+          {
+            "index": 13,
+            "sample_id": "8244cc1c-cf38-4548-ae18-c24a8d6fe1be",
+            "mode": "loop",
+            "color": "#9B59B6",
+            "label": "Bass loop 2",
+            "muted": false,
+            "group": 0
+          },
+          {
+            "index": 14,
+            "sample_id": "a67c8202-4ab4-4e63-b36b-efa2dc40dd30",
+            "mode": "loop",
+            "color": "#9B59B6",
+            "label": "Bass loop 3",
+            "muted": false,
+            "group": 0
+          },
+          {
+            "index": 15,
+            "sample_id": "ebf5c704-9d2b-4420-9c37-8d3d3f90a4a8",
+            "mode": "loop",
+            "color": "#9B59B6",
+            "label": "Bass loop 4",
+            "muted": false,
+            "group": 0
+          }
+        ]
+      }
+    ],
+    "active_bank_id": "8a51a0da-04ea-461c-aadc-c2585009ae8c"
+  }
+}

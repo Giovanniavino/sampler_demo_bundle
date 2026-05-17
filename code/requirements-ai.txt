@@ -1,0 +1,21 @@
+# Heavy AI deps - install when you want real stem separation.
+# Use the official torch install command for your platform/CUDA first:
+#   https://pytorch.org/get-started/locally/
+# Then:
+#   pip install -r requirements-ai.txt
+
+torch>=2.1
+torchaudio>=2.1
+demucs>=4.0
+
+# Optional DSP helpers:
+# `madmom` is intentionally not included here. It is not used by the shipped
+# analyzer yet, and it often fails to build on Windows / very new Python
+# versions under pip build isolation.
+#
+# If you want to experiment with it anyway, try:
+#   pip install "Cython<3" numpy
+#   pip install --no-build-isolation madmom==0.16.1
+#
+# Then wire it into `app/audio/analysis/analyzer.py`.
+pyrubberband>=0.3     # high-quality pitch/time (needs `rubberband-cli` system pkg)

@@ -1,0 +1,28 @@
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+.env
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
+cpp_engine/build/
+
+# Data / cache (keep folder structure, ignore content)
+data/cache/*
+!data/cache/.gitkeep
+data/models/*
+!data/models/.gitkeep
+data/projects/*
+!data/projects/.gitkeep
+
+# IDE
+.vscode/
+.idea/
+*.swp
