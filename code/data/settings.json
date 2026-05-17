@@ -1,0 +1,33 @@
+{
+  "slicing": {
+    "min_vocal_phrase_ms": 1500.0,
+    "max_vocal_phrase_ms": 12000.0,
+    "vocal_phrase_min_gap_ms": 700.0,
+    "max_vocal_phrases": 6,
+    "vocal_chop_length_ms": 1200,
+    "max_vocal_chops": 6,
+    "drum_hit_length_ms": 400,
+    "max_drum_hits": 16,
+    "drum_hit_min_spacing_beats": 1.0,
+    "n_loops_per_stem": 4,
+    "drum_loop_bars": 2,
+    "bass_loop_bars": 2,
+    "melody_phrase_bars": 4
+  },
+  "pad_layout": {
+    "pads_drum_hit": 4,
+    "pads_drum_loop": 2,
+    "pads_vocal_chop": 3,
+    "pads_vocal_phrase": 1,
+    "pads_melody": 3,
+    "pads_bass_loop": 3,
+    "grid_size": 16
+  },
+  "playback": {
+    "sample_rate": 44100,
+    "block_size": 512,
+    "press_hold_loop": true,
+    "auto_choke_drums": true,
+    "auto_normalize_stems": false
+  }
+}

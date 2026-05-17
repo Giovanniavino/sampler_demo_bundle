@@ -1,8 +1,10 @@
 """
-AppSettings — all user-configurable parameters in one place.
+AppSettings — all user-configurable parameters.
 
-The GUI settings panel reads/writes this object. The pipeline and engine
-read it at run-time. Persisted to data/settings.json.
+New in this version:
+  - QualityMode: 'fast' or 'quality', chosen once at first launch
+  - Preset-based slicing config (Short/Medium/Long/Custom etc.)
+  - Noise reduction settings per mode
 """
 
 from __future__ import annotations
@@ -11,47 +13,103 @@ import json
 import logging
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
+from typing import Literal, Optional
 
 log = logging.getLogger(__name__)
 
+QualityMode = Literal["fast", "quality"]
+
+# ---------------------------------------------------------------------------
+# Preset definitions — human-readable names map to technical values
+# ---------------------------------------------------------------------------
+
+VOCAL_PRESETS = {
+    "Short":  dict(min_vocal_phrase_ms=800,  max_vocal_phrase_ms=5000,  vocal_phrase_min_gap_ms=300),
+    "Medium": dict(min_vocal_phrase_ms=1500, max_vocal_phrase_ms=10000, vocal_phrase_min_gap_ms=600),
+    "Long":   dict(min_vocal_phrase_ms=3000, max_vocal_phrase_ms=15000, vocal_phrase_min_gap_ms=900),
+    "Custom": None,   # values taken directly from slicing settings
+}
+
+DRUM_PRESETS = {
+    "Punchy":   dict(drum_hit_length_ms=200, max_drum_hits=12, drum_hit_min_spacing_beats=0.5),
+    "Standard": dict(drum_hit_length_ms=400, max_drum_hits=16, drum_hit_min_spacing_beats=1.0),
+    "Full":     dict(drum_hit_length_ms=700, max_drum_hits=20, drum_hit_min_spacing_beats=2.0),
+    "Custom":   None,
+}
+
+LOOP_PRESETS = {
+    "Tight":    dict(n_loops_per_stem=3, drum_loop_bars=1, bass_loop_bars=1, melody_phrase_bars=2),
+    "Standard": dict(n_loops_per_stem=4, drum_loop_bars=2, bass_loop_bars=2, melody_phrase_bars=4),
+    "Spacious": dict(n_loops_per_stem=4, drum_loop_bars=4, bass_loop_bars=4, melody_phrase_bars=8),
+    "Custom":   None,
+}
+
+
+# ---------------------------------------------------------------------------
+# Dataclasses
+# ---------------------------------------------------------------------------
 
 @dataclass
 class SlicingSettings:
-    # --- Vocal phrases ---
-    min_vocal_phrase_ms: float = 1500.0
-    max_vocal_phrase_ms: float = 12000.0
-    vocal_phrase_min_gap_ms: float = 700.0
-    max_vocal_phrases: int = 6
-    # --- Vocal chops ---
+    # Preset names (drive the UI; Custom = manual values below)
+    vocal_preset: str = "Medium"
+    drum_preset:  str = "Standard"
+    loop_preset:  str = "Standard"
+
+    # Vocal phrases
+    min_vocal_phrase_ms:     float = 1500.0
+    max_vocal_phrase_ms:     float = 10000.0
+    vocal_phrase_min_gap_ms: float = 600.0
+    max_vocal_phrases:       int   = 6
+    # Vocal chops
     vocal_chop_length_ms: int = 1200
-    max_vocal_chops: int = 6
-    # --- Drum hits ---
-    drum_hit_length_ms: int = 400
-    max_drum_hits: int = 16
-    drum_hit_min_spacing_beats: float = 1.0
-    # --- Loops ---
-    n_loops_per_stem: int = 4
-    drum_loop_bars: int = 2
-    bass_loop_bars: int = 2
-    melody_phrase_bars: int = 4
+    max_vocal_chops:      int = 6
+    # Drum hits
+    drum_hit_length_ms:          int   = 400
+    max_drum_hits:               int   = 16
+    drum_hit_min_spacing_beats:  float = 1.0
+    # Loops
+    n_loops_per_stem:    int = 4
+    drum_loop_bars:      int = 2
+    bass_loop_bars:      int = 2
+    melody_phrase_bars:  int = 4
+
+    def apply_vocal_preset(self, name: str):
+        if name == "Custom" or name not in VOCAL_PRESETS:
+            self.vocal_preset = "Custom"
+            return
+        self.vocal_preset = name
+        for k, v in VOCAL_PRESETS[name].items():
+            setattr(self, k, v)
+
+    def apply_drum_preset(self, name: str):
+        if name == "Custom" or name not in DRUM_PRESETS:
+            self.drum_preset = "Custom"
+            return
+        self.drum_preset = name
+        for k, v in DRUM_PRESETS[name].items():
+            setattr(self, k, v)
+
+    def apply_loop_preset(self, name: str):
+        if name == "Custom" or name not in LOOP_PRESETS:
+            self.loop_preset = "Custom"
+            return
+        self.loop_preset = name
+        for k, v in LOOP_PRESETS[name].items():
+            setattr(self, k, v)
 
 
 @dataclass
 class PadLayoutSettings:
-    # How many pads each category gets. Total must fit inside grid_size.
-    pads_drum_hit: int = 4
-    pads_drum_loop: int = 2
-    pads_vocal_chop: int = 3
+    pads_drum_hit:    int = 4
+    pads_drum_loop:   int = 2
+    pads_vocal_chop:  int = 3
     pads_vocal_phrase: int = 1
-    pads_melody: int = 3
-    pads_bass_loop: int = 3
-    grid_size: int = 16       # total pad count; changing this resizes the grid
+    pads_melody:      int = 3
+    pads_bass_loop:   int = 3
+    grid_size:        int = 16
 
-    def row_config(self) -> list[tuple[int, list, str]]:
-        """
-        Build the layout as (count, [categories], default_mode_value) triples,
-        in display order. Called by PadAssigner.
-        """
+    def row_config(self):
         from app.core.models import PadMode, SampleCategory
         rows = []
         if self.pads_drum_hit > 0:
@@ -73,14 +131,10 @@ class PadLayoutSettings:
 
 @dataclass
 class PlaybackSettings:
-    sample_rate: int = 44100       # 44100 | 48000
-    block_size: int = 512          # 128 | 256 | 512 | 1024
-    # Press-and-hold loop: if the pad is still held when the sample ends,
-    # it loops automatically until released.
-    press_hold_loop: bool = True
-    # Choke group auto-assign for drum hits
-    auto_choke_drums: bool = True
-    # Normalize each stem to -6 dBFS before slicing
+    sample_rate:          int  = 44100
+    block_size:           int  = 512
+    press_hold_loop:      bool = True
+    auto_choke_drums:     bool = True
     auto_normalize_stems: bool = False
 
     @property
@@ -90,9 +144,36 @@ class PlaybackSettings:
 
 @dataclass
 class AppSettings:
-    slicing: SlicingSettings = field(default_factory=SlicingSettings)
-    pad_layout: PadLayoutSettings = field(default_factory=PadLayoutSettings)
-    playback: PlaybackSettings = field(default_factory=PlaybackSettings)
+    # None = not yet chosen → triggers first-launch dialog
+    quality_mode: Optional[QualityMode] = None
+
+    slicing:    SlicingSettings    = field(default_factory=SlicingSettings)
+    pad_layout: PadLayoutSettings  = field(default_factory=PadLayoutSettings)
+    playback:   PlaybackSettings   = field(default_factory=PlaybackSettings)
+
+    # ---- Derived helpers ----------------------------------------------
+
+    @property
+    def demucs_model(self) -> str:
+        return "htdemucs" if self.quality_mode == "fast" else "htdemucs_ft"
+
+    @property
+    def noise_reduction_pre(self) -> bool:
+        """Always reduce noise before separation."""
+        return True
+
+    @property
+    def noise_reduction_post(self) -> bool:
+        """Reduce noise on each stem after separation only in quality mode."""
+        return self.quality_mode == "quality"
+
+    @property
+    def nr_pre_profile(self) -> str:
+        return "fast" if self.quality_mode == "fast" else "quality_pre"
+
+    @property
+    def nr_post_profile(self) -> str:
+        return "quality_post"
 
     # ---- Persistence --------------------------------------------------
 
@@ -100,7 +181,6 @@ class AppSettings:
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("w", encoding="utf-8") as f:
             json.dump(asdict(self), f, indent=2)
-        log.info("Settings saved to %s", path)
 
     @classmethod
     def load(cls, path: Path) -> "AppSettings":
@@ -110,6 +190,7 @@ class AppSettings:
             with path.open("r", encoding="utf-8") as f:
                 raw = json.load(f)
             return cls(
+                quality_mode=raw.get("quality_mode"),
                 slicing=SlicingSettings(**raw.get("slicing", {})),
                 pad_layout=PadLayoutSettings(**raw.get("pad_layout", {})),
                 playback=PlaybackSettings(**raw.get("playback", {})),
@@ -119,7 +200,6 @@ class AppSettings:
             return cls()
 
     def to_slicer_config(self):
-        """Convert to the SlicerConfig used by AutoSlicer."""
         from app.audio.slicing.auto_slicer import SlicerConfig
         s = self.slicing
         return SlicerConfig(
