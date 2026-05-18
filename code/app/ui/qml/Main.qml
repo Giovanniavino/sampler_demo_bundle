@@ -465,21 +465,21 @@ ApplicationWindow {
             }
 
             // ── Pinch-to-zoom (touchscreen) ──────────────────────────
-            PinchArea {
-                anchors.fill: parent
-                mouseEnabled: false   // don't steal mouse from marker drags
+            PinchHandler {
+                target: null
+                acceptedDevices: PointerDevice.TouchScreen | PointerDevice.TouchPad
                 property real _z0: 0
                 property real _z1: 1
-                onPinchStarted: {
+                onActiveChanged: if (active) {
                     _z0 = controller.zoomStart
                     _z1 = controller.zoomEnd
                 }
-                onPinchUpdated: {
+                onActiveScaleChanged: if (active) {
                     var origSpan = _z1 - _z0
                     // Centre of pinch in absolute frac (using start snapshot)
-                    var cx = _z0 + (pinch.center.x / wfBg.width) * origSpan
+                    var cx = _z0 + (centroid.position.x / wfBg.width) * origSpan
                     var newSpan = Math.max(0.02,
-                        Math.min(1.0, origSpan / Math.max(0.01, pinch.scale)))
+                        Math.min(1.0, origSpan / Math.max(0.01, activeScale)))
                     var ns = cx - newSpan / 2
                     var ne = cx + newSpan / 2
                     // Clamp & shift to keep inside [0,1]
