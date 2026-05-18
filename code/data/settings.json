@@ -1,5 +1,9 @@
 {
+  "quality_mode": "quality",
   "slicing": {
+    "vocal_preset": "Medium",
+    "drum_preset": "Standard",
+    "loop_preset": "Standard",
     "min_vocal_phrase_ms": 1500.0,
     "max_vocal_phrase_ms": 12000.0,
     "vocal_phrase_min_gap_ms": 700.0,
@@ -16,18 +20,18 @@
   },
   "pad_layout": {
     "pads_drum_hit": 4,
-    "pads_drum_loop": 2,
-    "pads_vocal_chop": 3,
-    "pads_vocal_phrase": 1,
-    "pads_melody": 3,
-    "pads_bass_loop": 3,
-    "grid_size": 16
+    "pads_drum_loop": 4,
+    "pads_vocal_chop": 4,
+    "pads_vocal_phrase": 4,
+    "pads_melody": 4,
+    "pads_bass_loop": 4,
+    "grid_size": 24
   },
   "playback": {
     "sample_rate": 44100,
-    "block_size": 512,
+    "block_size": 1024,
     "press_hold_loop": true,
-    "auto_choke_drums": true,
-    "auto_normalize_stems": false
+    "auto_choke_drums": false,
+    "auto_normalize_stems": true
   }
 }

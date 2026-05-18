@@ -44,8 +44,9 @@ class LibrosaAnalyzer(Analyzer):
         label (intro/verse/chorus/bridge/outro) based on position and energy.
     """
 
-    def __init__(self, hop_length: int = 512):
+    def __init__(self, hop_length: int = 512, section_detector=None):
         self.hop_length = hop_length
+        self._section_detector = section_detector
 
     # ---- Public --------------------------------------------------------
 
@@ -68,12 +69,17 @@ class LibrosaAnalyzer(Analyzer):
         drums = next((s for s in stems if s.stem_type == StemType.DRUMS), None)
         transients = self._transients(drums.path if drums else source.path, sr)
 
-        sections = self._sections(y, sr)
+        # Use the dedicated section detector (allin1 or SSM fallback).
+        # Lazy import to keep startup time low.
+        if self._section_detector is None:
+            from app.audio.analysis.section_detector import make_section_detector
+            self._section_detector = make_section_detector(prefer_allin1=True)
+        sections = self._section_detector.detect(source.path)
 
         return AnalysisResult(
             source_id=source.id,
             bpm=float(bpm),
-            bpm_confidence=0.8,  # librosa doesn't expose this; placeholder
+            bpm_confidence=0.8,
             beats=beat_objs,
             sections=sections,
             transients=transients,

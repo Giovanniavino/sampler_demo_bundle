@@ -289,7 +289,7 @@ ApplicationWindow {
                             font.pixelSize: 14; font.bold: true }
                         Text { anchors.verticalCenter: parent.verticalCenter
                             anchors.right: parent.right; anchors.rightMargin: 16
-                            text: "How long each sung phrase should be"
+                            text: "Short = single words/lines  •  Long = full verses or choruses"
                             color: cMuted; font.pixelSize: 11 }
                     }
                     Rectangle { width: parent.width; color: cCard; height: 56
@@ -300,6 +300,19 @@ ApplicationWindow {
                             presets: ["Short", "Medium", "Long", "Custom"]
                             current: controller.vocalPreset
                             onChosen: function(name) { controller.applyVocalPreset(name) }
+                        }
+                    }
+                    // Dynamic explanation
+                    Rectangle { width: parent.width; height: 26; color: cCard
+                        Text { anchors.verticalCenter: parent.verticalCenter
+                            anchors.left: parent.left; anchors.leftMargin: 130
+                            color: cMuted; font.pixelSize: 10; font.italic: true
+                            text: {
+                                if (controller.vocalPreset === "Short")  return "≈0.8–5s phrases. Good for chops, ad-libs, single words."
+                                if (controller.vocalPreset === "Medium") return "≈1.5–10s phrases. Standard lines (default)."
+                                if (controller.vocalPreset === "Long")   return "≈3–15s phrases. Full verses or chorus lines."
+                                return "Set min/max length yourself below."
+                            }
                         }
                     }
                     // Custom fields — only visible when preset == Custom
@@ -359,7 +372,7 @@ ApplicationWindow {
                             text: "Drum Hits"; color: cText; font.pixelSize: 14; font.bold: true }
                         Text { anchors.verticalCenter: parent.verticalCenter
                             anchors.right: parent.right; anchors.rightMargin: 16
-                            text: "Length and density of drum hit samples"
+                            text: "Punchy = short kicks/snares  •  Full = longer hits with tail"
                             color: cMuted; font.pixelSize: 11 }
                     }
                     Rectangle { width: parent.width; color: cCard; height: 56
@@ -370,6 +383,18 @@ ApplicationWindow {
                             presets: ["Punchy", "Standard", "Full", "Custom"]
                             current: controller.drumPreset
                             onChosen: function(name) { controller.applyDrumPreset(name) }
+                        }
+                    }
+                    Rectangle { width: parent.width; height: 26; color: cCard
+                        Text { anchors.verticalCenter: parent.verticalCenter
+                            anchors.left: parent.left; anchors.leftMargin: 130
+                            color: cMuted; font.pixelSize: 10; font.italic: true
+                            text: {
+                                if (controller.drumPreset === "Punchy")   return "200ms hits, dense. Best for trap/footwork-style pads."
+                                if (controller.drumPreset === "Standard") return "400ms hits. Balanced default."
+                                if (controller.drumPreset === "Full")     return "700ms hits with full tail. Best for cinematic/breakbeats."
+                                return "Set hit length and density below."
+                            }
                         }
                     }
                     Rectangle {
@@ -417,6 +442,18 @@ ApplicationWindow {
                             onChosen: function(name) { controller.applyLoopPreset(name) }
                         }
                     }
+                    Rectangle { width: parent.width; height: 26; color: cCard
+                        Text { anchors.verticalCenter: parent.verticalCenter
+                            anchors.left: parent.left; anchors.leftMargin: 130
+                            color: cMuted; font.pixelSize: 10; font.italic: true
+                            text: {
+                                if (controller.loopPreset === "Tight")    return "1-bar loops. Quick repeats, more variations."
+                                if (controller.loopPreset === "Standard") return "2-bar drum/bass, 4-bar melody. Default."
+                                if (controller.loopPreset === "Spacious") return "4-bar drum/bass, 8-bar melody. Longer breathing room."
+                                return "Set bars per loop type below."
+                            }
+                        }
+                    }
                     Rectangle {
                         width: parent.width
                         height: controller.loopPreset === "Custom" ? 80 : 0
@@ -453,9 +490,32 @@ ApplicationWindow {
 
             // ── TAB 1: Pad Layout ─────────────────────────────────────
             Item {
-                GridLayout {
+                Column {
                     anchors.centerIn: parent
-                    columns: 4; columnSpacing: 20; rowSpacing: 16
+                    spacing: 20
+
+                    // Header explanation
+                    Column {
+                        spacing: 4; width: 600
+                        Text { text: "Pad Layout"; color: cText
+                            font.pixelSize: 16; font.bold: true
+                            anchors.horizontalCenter: parent.horizontalCenter }
+                        Text { text: "Choose how many pads to assign to each category. " +
+                                       "The total must not exceed the grid size."
+                            color: cMuted; font.pixelSize: 11
+                            anchors.horizontalCenter: parent.horizontalCenter
+                            horizontalAlignment: Text.AlignHCenter }
+                        Text { text: "Tip: more pads of one category = more variety. " +
+                                       "Set categories to 0 to skip them entirely."
+                            color: cMuted; font.pixelSize: 10
+                            anchors.horizontalCenter: parent.horizontalCenter
+                            horizontalAlignment: Text.AlignHCenter
+                            font.italic: true }
+                    }
+
+                    GridLayout {
+                        anchors.horizontalCenter: parent.horizontalCenter
+                        columns: 4; columnSpacing: 20; rowSpacing: 16
 
                     Text { text: "Category";    color: cMuted; font.pixelSize: 11; font.bold: true }
                     Text { text: "Pads";         color: cMuted; font.pixelSize: 11; font.bold: true }
@@ -507,56 +567,177 @@ ApplicationWindow {
                         color: (plDH.value+plDL.value+plVC.value+plVP.value+plMel.value+plBL.value) > plGS.value ? cOrange : cGreen
                         font.pixelSize: 12
                     }
+                    }
                 }
             }
 
             // ── TAB 2: Playback ───────────────────────────────────────
-            Item {
-                GridLayout {
-                    anchors.centerIn: parent
-                    columns: 2; columnSpacing: 28; rowSpacing: 16
+            ScrollView {
+                clip: true
+                Column {
+                    width: parent.width; spacing: 0
 
-                    Text { text: "Block size"; color: cText; font.pixelSize: 13 }
-                    ComboBox { id: cbBS; model: [128,256,512,1024]
-                        currentIndex: { var v=controller.blockSize; for(var i=0;i<model.length;i++) if(model[i]===v) return i; return 2 }
-                        background: Rectangle { color: cCard; border.color: cBorder; radius: 4 }
-                        contentItem: Text { text: cbBS.displayText; color: cText; font.pixelSize: 12
-                            leftPadding: 8; verticalAlignment: Text.AlignVCenter } }
+                    // --- helper component: labeled row with description ---
+                    component LabeledRow: Rectangle {
+                        property string title: ""
+                        property string desc: ""
+                        default property alias content: ctrl.children
+                        width: parent.width; height: 60; color: cCard
 
-                    Text { text: "Sample rate"; color: cText; font.pixelSize: 13 }
-                    ComboBox { id: cbSR; model: [44100,48000]
-                        currentIndex: controller.sampleRate === 48000 ? 1 : 0
-                        background: Rectangle { color: cCard; border.color: cBorder; radius: 4 }
-                        contentItem: Text { text: cbSR.displayText; color: cText; font.pixelSize: 12
-                            leftPadding: 8; verticalAlignment: Text.AlignVCenter } }
+                        Column {
+                            anchors.left: parent.left; anchors.leftMargin: 20
+                            anchors.verticalCenter: parent.verticalCenter; spacing: 2
+                            Text { text: title; color: cText; font.pixelSize: 13; font.bold: true }
+                            Text { text: desc; color: cMuted; font.pixelSize: 10
+                                width: settingsPanel.width * 0.45; wrapMode: Text.WordWrap }
+                        }
+                        Item { id: ctrl
+                            anchors.right: parent.right; anchors.rightMargin: 20
+                            anchors.verticalCenter: parent.verticalCenter
+                            width: 200; height: 32 }
+                    }
 
-                    Text { text: "Estimated latency"; color: cMuted; font.pixelSize: 12 }
-                    Text { text: (cbBS.currentValue / cbSR.currentValue * 1000).toFixed(1) + " ms"
-                        color: cAccent; font.pixelSize: 13; font.bold: true }
+                    component SegSelector: Row {
+                        property var options: []
+                        property string current: ""
+                        signal chosen(string name)
+                        spacing: 4
+                        Repeater {
+                            model: parent.options
+                            Rectangle {
+                                width: 60; height: 28; radius: 6
+                                property bool sel: parent.parent.current === modelData
+                                color: sel ? cAccent : cCard
+                                border.color: sel ? cAccent : cBorder
+                                Behavior on color { ColorAnimation { duration: 80 } }
+                                Text { anchors.centerIn: parent; text: modelData
+                                    color: sel ? "white" : cText
+                                    font.pixelSize: 11; font.bold: sel
+                                    font.capitalization: Font.Capitalize }
+                                MouseArea { anchors.fill: parent
+                                    onClicked: parent.parent.parent.chosen(modelData) }
+                            }
+                        }
+                    }
 
-                    Text { text: "Press-and-hold loop"; color: cText; font.pixelSize: 13 }
-                    Switch { id: swHL; checked: controller.pressHoldLoop
-                        indicator: Rectangle { width: 44; height: 22; radius: 11
-                            color: parent.checked ? cAccent : cCard; border.color: cBorder
-                            Rectangle { x: parent.parent.checked ? 24 : 2; y: 2; width: 18; height: 18
-                                radius: 9; color: cText
-                                Behavior on x { NumberAnimation { duration: 120 } } } } }
+                    Rectangle { width: parent.width; height: 1; color: cBorder }
+                    Rectangle { width: parent.width; height: 34; color: cPanel
+                        Text { anchors.verticalCenter: parent.verticalCenter
+                            anchors.left: parent.left; anchors.leftMargin: 16
+                            text: "AUDIO ENGINE"; color: cMuted
+                            font.pixelSize: 10; font.bold: true } }
 
-                    Text { text: "Auto-normalize stems"; color: cText; font.pixelSize: 13 }
-                    Switch { id: swNorm; checked: controller.autoNormalizeStems
-                        indicator: Rectangle { width: 44; height: 22; radius: 11
-                            color: parent.checked ? cAccent : cCard; border.color: cBorder
-                            Rectangle { x: parent.parent.checked ? 24 : 2; y: 2; width: 18; height: 18
-                                radius: 9; color: cText
-                                Behavior on x { NumberAnimation { duration: 120 } } } } }
+                    LabeledRow {
+                        title: "Buffer size"
+                        desc: "Smaller = lower latency but higher CPU. 512 is safe."
+                        ComboBox { id: cbBS; model: [128, 256, 512, 1024]
+                            anchors.fill: parent
+                            currentIndex: { var v=controller.blockSize
+                                for (var i=0;i<model.length;i++) if (model[i]===v) return i
+                                return 2 }
+                            background: Rectangle { color: cPanel; border.color: cBorder; radius: 4 }
+                            contentItem: Text { text: cbBS.displayText + " samples"
+                                color: cText; font.pixelSize: 12; leftPadding: 8
+                                verticalAlignment: Text.AlignVCenter } }
+                    }
 
-                    Text { text: "Auto-choke drums"; color: cText; font.pixelSize: 13 }
-                    Switch { id: swChk; checked: controller.autoChokeDrums
-                        indicator: Rectangle { width: 44; height: 22; radius: 11
-                            color: parent.checked ? cAccent : cCard; border.color: cBorder
-                            Rectangle { x: parent.parent.checked ? 24 : 2; y: 2; width: 18; height: 18
-                                radius: 9; color: cText
-                                Behavior on x { NumberAnimation { duration: 120 } } } } }
+                    LabeledRow {
+                        title: "Sample rate"
+                        desc: "Output sample rate. 44.1 kHz matches most music files."
+                        ComboBox { id: cbSR; model: [44100, 48000]
+                            anchors.fill: parent
+                            currentIndex: controller.sampleRate === 48000 ? 1 : 0
+                            background: Rectangle { color: cPanel; border.color: cBorder; radius: 4 }
+                            contentItem: Text { text: cbSR.displayText + " Hz"
+                                color: cText; font.pixelSize: 12; leftPadding: 8
+                                verticalAlignment: Text.AlignVCenter } }
+                    }
+
+                    LabeledRow {
+                        title: "Estimated latency"
+                        desc: "Time from pressing a pad to hearing the sound."
+                        Text { anchors.fill: parent
+                            text: (cbBS.currentValue / cbSR.currentValue * 1000).toFixed(1) + " ms"
+                            color: cAccent; font.pixelSize: 14; font.bold: true
+                            verticalAlignment: Text.AlignVCenter }
+                    }
+
+                    // --- NOISE REDUCTION section ---
+                    Rectangle { width: parent.width; height: 1; color: cBorder }
+                    Rectangle { width: parent.width; height: 34; color: cPanel
+                        Text { anchors.verticalCenter: parent.verticalCenter
+                            anchors.left: parent.left; anchors.leftMargin: 16
+                            text: "NOISE REDUCTION"; color: cMuted
+                            font.pixelSize: 10; font.bold: true } }
+
+                    LabeledRow {
+                        title: "Pre-separation"
+                        desc: "Cleans the whole song before splitting into stems. " +
+                              "Light is usually enough. Strong may dull the audio."
+                        property string cur: controller.nrLevelPre
+                        SegSelector { id: segPre; anchors.fill: parent
+                            options: ["off", "light", "strong"]
+                            current: parent.cur
+                            onChosen: function(name) { parent.cur = name } }
+                    }
+
+                    LabeledRow {
+                        title: "Post-separation (per stem)"
+                        desc: "Cleans each stem individually after splitting. " +
+                              "Most useful for cleaning bleed in vocal stem. Off by default."
+                        property string cur: controller.nrLevelPost
+                        SegSelector { id: segPost; anchors.fill: parent
+                            options: ["off", "light", "strong"]
+                            current: parent.cur
+                            onChosen: function(name) { parent.cur = name } }
+                    }
+
+                    // --- BEHAVIOR section ---
+                    Rectangle { width: parent.width; height: 1; color: cBorder }
+                    Rectangle { width: parent.width; height: 34; color: cPanel
+                        Text { anchors.verticalCenter: parent.verticalCenter
+                            anchors.left: parent.left; anchors.leftMargin: 16
+                            text: "BEHAVIOR"; color: cMuted
+                            font.pixelSize: 10; font.bold: true } }
+
+                    LabeledRow {
+                        title: "Press-and-hold loop"
+                        desc: "If you keep a pad held past the sample's end, it loops " +
+                              "until you release. EXPERIMENTAL — disable if pads sound doubled."
+                        Switch { id: swHL; checked: controller.pressHoldLoop
+                            anchors.right: parent.right; anchors.verticalCenter: parent.verticalCenter
+                            indicator: Rectangle { width: 44; height: 22; radius: 11
+                                color: parent.checked ? cAccent : cCard; border.color: cBorder
+                                Rectangle { x: parent.parent.checked ? 24 : 2; y: 2
+                                    width: 18; height: 18; radius: 9; color: cText
+                                    Behavior on x { NumberAnimation { duration: 120 } } } } }
+                    }
+
+                    LabeledRow {
+                        title: "Auto-normalize stems"
+                        desc: "Levels stems so quiet stems are louder. Useful if vocal " +
+                              "stem is too soft. May raise the noise floor."
+                        Switch { id: swNorm; checked: controller.autoNormalizeStems
+                            anchors.right: parent.right; anchors.verticalCenter: parent.verticalCenter
+                            indicator: Rectangle { width: 44; height: 22; radius: 11
+                                color: parent.checked ? cAccent : cCard; border.color: cBorder
+                                Rectangle { x: parent.parent.checked ? 24 : 2; y: 2
+                                    width: 18; height: 18; radius: 9; color: cText
+                                    Behavior on x { NumberAnimation { duration: 120 } } } } }
+                    }
+
+                    LabeledRow {
+                        title: "Auto-choke drums"
+                        desc: "Drum hits on the same row cut each other off when triggered " +
+                              "(like a real drum kit's hi-hat)."
+                        Switch { id: swChk; checked: controller.autoChokeDrums
+                            anchors.right: parent.right; anchors.verticalCenter: parent.verticalCenter
+                            indicator: Rectangle { width: 44; height: 22; radius: 11
+                                color: parent.checked ? cAccent : cCard; border.color: cBorder
+                                Rectangle { x: parent.parent.checked ? 24 : 2; y: 2
+                                    width: 18; height: 18; radius: 9; color: cText
+                                    Behavior on x { NumberAnimation { duration: 120 } } } } }
+                    }
                 }
             }
 
@@ -642,7 +823,8 @@ ApplicationWindow {
                                     plVP.value, plMel.value, plBL.value, plGS.value)
                             } else if (t === 2) {
                                 controller.applyPlaybackSettings(cbBS.currentValue,
-                                    cbSR.currentValue, swHL.checked, swNorm.checked, swChk.checked)
+                                    cbSR.currentValue, swHL.checked, swNorm.checked, swChk.checked,
+                                    segPre.current, segPost.current)
                             }
                             showSettings = false
                         }

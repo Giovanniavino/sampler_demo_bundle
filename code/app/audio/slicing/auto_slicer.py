@@ -48,6 +48,9 @@ class SlicerConfig:
     # Min spacing between drum hits, in BEATS. 1.0 = at least 1 beat apart.
     # Prevents grabbing 32 nearly-identical kicks from a 4-on-floor section.
     drum_hit_min_spacing_beats: float = 1.0
+    # Quantize drum hits to the nearest 16th-note grid if within this many ms.
+    # 0 disables quantize. 30ms is the MPC default — tight but keeps groove.
+    drum_quantize_tolerance_ms: float = 30.0
 
     # Loops
     n_loops_per_stem: int = 4            # how many loop variations per stem
@@ -124,17 +127,24 @@ class AutoSlicer:
         hit_len = int(self.cfg.drum_hit_length_ms / 1000 * stem.sample_rate)
 
         # 1) Drum hits — distributed across the track with min-spacing.
-        # Strategy: take all transients above a strength threshold, then greedily
-        # pick the strongest while enforcing min spacing in samples.
         min_spacing = int(self.cfg.drum_hit_min_spacing_beats * samples_per_beat)
         picked = self._pick_spaced_transients(
             analysis.transients, max_n=self.cfg.max_drum_hits, min_spacing=min_spacing,
         )
-        # Sort chronologically for nicer pad layout
         picked.sort(key=lambda t: t.position)
+
+        # Build 16th-note grid for quantization
+        sixteenth_grid = self._build_sixteenth_grid(
+            [b.position for b in analysis.beats]
+        )
+        tolerance = int(self.cfg.drum_quantize_tolerance_ms
+                         / 1000 * stem.sample_rate)
+
         for i, t in enumerate(picked):
-            start = t.position
-            end = min(t.position + hit_len, stem.duration_samples)
+            # Quantize start to nearest 16th IF within tolerance,
+            # otherwise leave the transient where librosa found it
+            start = self._quantize_to_grid(t.position, sixteenth_grid, tolerance)
+            end = min(start + hit_len, stem.duration_samples)
             end = self._snap(audio, end, zc_window, "nearest")
             out.append(self._mk_sample(
                 stem, start, end,
@@ -150,6 +160,36 @@ class AutoSlicer:
         ))
         return out
 
+    # ---- 16th-note grid + quantize ------------------------------------
+
+    def _build_sixteenth_grid(self, beats: list[int]) -> list[int]:
+        """4 grid points per beat (16th notes). Linear interpolation."""
+        if len(beats) < 2:
+            return list(beats)
+        grid = []
+        for i in range(len(beats) - 1):
+            b0, b1 = beats[i], beats[i + 1]
+            step = (b1 - b0) / 4
+            for k in range(4):
+                grid.append(int(b0 + step * k))
+        grid.append(beats[-1])
+        return grid
+
+    def _quantize_to_grid(self, position: int, grid: list[int],
+                          tolerance: int) -> int:
+        """Snap to nearest grid point if within tolerance; else unchanged."""
+        if not grid or tolerance <= 0:
+            return position
+        import bisect
+        i = bisect.bisect_left(grid, position)
+        candidates = []
+        if i > 0:          candidates.append(grid[i - 1])
+        if i < len(grid):  candidates.append(grid[i])
+        if not candidates:
+            return position
+        nearest = min(candidates, key=lambda x: abs(x - position))
+        return nearest if abs(nearest - position) <= tolerance else position
+
     # ---- Vocals --------------------------------------------------------
 
     def _slice_vocals(self, stem: Stem, analysis: AnalysisResult,
@@ -157,18 +197,150 @@ class AutoSlicer:
                       audio: Optional[np.ndarray], zc_window: int,
                       samples_per_beat: int) -> list[Sample]:
         """
-        Vocal slicing uses PHRASE DETECTION instead of fixed-length cuts.
+        Vocal slicing strategy (NEW):
 
-        Each "phrase" is a contiguous span of singing bracketed by silence
-        in the vocal stem. We turn each detected phrase into:
-          - a VOCAL_PHRASE sample covering the whole phrase (natural length)
-          - optionally a shorter VOCAL_CHOP cut from the start of the phrase
-            (useful for percussive playable bits)
+        1. Take the song's SECTIONS (verse, chorus, bridge from section_detector).
+        2. For each section, check if the vocal stem has energy in it.
+           - If yes → make a sample for the entire section, named like
+             "Vocal phrase - Chorus 1", "Vocal phrase - Verse 2", etc.
+           - If no  → skip (instrumental section)
+        3. Split very long sections (>max_vocal_phrase_ms) into halves so a
+           4-bar pad doesn't have a 30-second chorus on it.
+        4. Snap start/end to beat boundaries so phrases start on a downbeat.
+        5. Vocal chops are still cut from the start of each section that
+           contains vocals.
         """
+        out: list[Sample] = []
+        if stem.path is None or not analysis.sections:
+            # Fall back to old phrase detection if no sections
+            return self._slice_vocals_legacy(stem, analysis, beats, bpm,
+                                               audio, zc_window, samples_per_beat)
+
+        # Load vocal stem audio for energy detection
+        vocal_audio = self._load_stem_audio(stem)
+        if vocal_audio is None:
+            return self._slice_vocals_legacy(stem, analysis, beats, bpm,
+                                               audio, zc_window, samples_per_beat)
+
+        max_len_samples = int(self.cfg.max_vocal_phrase_ms / 1000 * stem.sample_rate)
+        min_len_samples = int(self.cfg.min_vocal_phrase_ms / 1000 * stem.sample_rate)
+
+        # Count occurrences of each label for naming (Verse 1, Verse 2, ...)
+        from collections import defaultdict
+        counters: dict[str, int] = defaultdict(int)
+
+        all_phrases: list[tuple[int, int, str]] = []   # (start, end, label_name)
+
+        for section in analysis.sections:
+            label = section.label.value
+            if label in ("intro", "outro", "unknown", "break"):
+                # These rarely have full vocal phrases worth sampling
+                continue
+
+            # Check vocal energy in this section
+            sec_start = max(0, min(section.start, len(vocal_audio)))
+            sec_end   = max(0, min(section.end,   len(vocal_audio)))
+            if sec_end - sec_start < min_len_samples:
+                continue
+            seg = vocal_audio[sec_start:sec_end]
+            rms = float(np.sqrt(np.mean(seg * seg))) if len(seg) else 0.0
+            if rms < 0.005:  # essentially silent vocal section
+                continue
+
+            # Split long sections in halves (or thirds for huge ones)
+            length = sec_end - sec_start
+            if length <= max_len_samples:
+                parts = [(sec_start, sec_end)]
+            else:
+                n_parts = int(np.ceil(length / max_len_samples))
+                step = length // n_parts
+                # Snap each split point to the nearest beat for musicality
+                parts = []
+                for i in range(n_parts):
+                    p_start = sec_start + i * step
+                    p_end = sec_start + (i + 1) * step if i < n_parts - 1 else sec_end
+                    p_start = self._snap_to_nearest_beat(p_start, beats)
+                    p_end   = self._snap_to_nearest_beat(p_end, beats)
+                    if p_end > p_start:
+                        parts.append((p_start, p_end))
+
+            for part_idx, (p_start, p_end) in enumerate(parts):
+                counters[label] += 1
+                num = counters[label]
+                part_suffix = f" pt{part_idx + 1}" if len(parts) > 1 else ""
+                name = f"{label.title()} {num}{part_suffix}"
+                all_phrases.append((p_start, p_end, name))
+
+        # Cap to max_vocal_phrases (most musically interesting sections first:
+        # chorus > verse > bridge — so keep ordering by label priority)
+        priority = {"chorus": 0, "verse": 1, "bridge": 2}
+        all_phrases.sort(key=lambda p: (priority.get(p[2].split()[0].lower(), 3), p[0]))
+        all_phrases = all_phrases[: self.cfg.max_vocal_phrases]
+        # Re-sort chronologically for nicer pad layout
+        all_phrases.sort(key=lambda p: p[0])
+
+        for start, end, name in all_phrases:
+            s_snap = self._snap(audio, start, zc_window, "backward")
+            e_snap = self._snap(audio, end, zc_window, "nearest")
+            out.append(self._mk_sample(
+                stem, s_snap, e_snap,
+                name=name,
+                category=SampleCategory.VOCAL_PHRASE,
+                bpm=bpm,
+            ))
+
+        # Vocal chops: short cuts from the START of each phrase
+        chop_len = int(self.cfg.vocal_chop_length_ms / 1000 * stem.sample_rate)
+        n_chops = min(self.cfg.max_vocal_chops, len(all_phrases))
+        if n_chops > 0:
+            if n_chops == 1:
+                chop_indices = [0]
+            else:
+                raw = np.linspace(0, len(all_phrases) - 1, n_chops)
+                chop_indices = sorted(set(int(round(x)) for x in raw))
+            for i, idx in enumerate(chop_indices):
+                p_start, p_end, name = all_phrases[idx]
+                chop_end = min(p_start + chop_len, p_end, stem.duration_samples)
+                if chop_end <= p_start:
+                    continue
+                s_snap = self._snap(audio, p_start, zc_window, "backward")
+                e_snap = self._snap(audio, chop_end, zc_window, "nearest")
+                short_name = name.replace("Verse", "V.").replace("Chorus", "C.") \
+                                  .replace("Bridge", "B.")
+                out.append(self._mk_sample(
+                    stem, s_snap, e_snap,
+                    name=f"Chop {short_name}",
+                    category=SampleCategory.VOCAL_CHOP,
+                ))
+
+        if not out:
+            log.info("Section-based vocal slicing produced nothing — "
+                     "falling back to phrase detection")
+            return self._slice_vocals_legacy(stem, analysis, beats, bpm,
+                                               audio, zc_window, samples_per_beat)
+        return out
+
+    def _snap_to_nearest_beat(self, position: int, beats: list[int]) -> int:
+        """Snap to the nearest beat position. Used for phrase boundaries."""
+        if not beats:
+            return position
+        import bisect
+        i = bisect.bisect_left(beats, position)
+        candidates = []
+        if i > 0:           candidates.append(beats[i - 1])
+        if i < len(beats):  candidates.append(beats[i])
+        if not candidates:
+            return position
+        return min(candidates, key=lambda b: abs(b - position))
+
+    def _slice_vocals_legacy(self, stem: Stem, analysis: AnalysisResult,
+                              beats: list[int], bpm: float,
+                              audio: Optional[np.ndarray], zc_window: int,
+                              samples_per_beat: int) -> list[Sample]:
+        """Old phrase-detection-based vocal slicing — kept as fallback."""
         out: list[Sample] = []
         if stem.path is None:
             return out
-
         from app.audio.analysis.vocal_phrase import (
             PhraseDetectionConfig, detect_vocal_phrases,
         )
@@ -179,98 +351,18 @@ class AutoSlicer:
             min_gap_ms=self.cfg.vocal_phrase_min_gap_ms,
         )
         phrases = detect_vocal_phrases(stem.path, phrase_cfg)
-
-        # If first pass found nothing, try a more aggressive config:
-        # higher noise floor (handles stems with bleed) + shorter min phrase.
-        # This commonly happens with the heuristic separator's vocal stem.
         if not phrases:
-            log.info("Retrying vocal phrase detection with relaxed thresholds")
-            # Don't go below the user's configured minimum entirely, but allow
-            # somewhat shorter phrases in the fallback (60% of the user's min).
-            relaxed_min = max(400.0, self.cfg.min_vocal_phrase_ms * 0.6)
-            relaxed = PhraseDetectionConfig(
-                noise_floor_percentile=60.0,   # much higher floor
-                threshold_multiplier=1.15,
-                min_phrase_ms=relaxed_min,
-                min_gap_ms=self.cfg.vocal_phrase_min_gap_ms,
-                max_phrases=self.cfg.max_vocal_phrases * 2,  # find more, we'll merge
-                max_phrase_ms=self.cfg.max_vocal_phrase_ms,
-            )
-            phrases = detect_vocal_phrases(stem.path, relaxed)
+            return out
 
-        # Merge adjacent phrases together until each reaches the requested
-        # minimum duration. Done in sample-domain: we merge phrase[i] with
-        # phrase[i+1] (including the gap between them) when phrase[i] is too
-        # short. This produces longer, more musically satisfying samples
-        # without padding silence into the middle.
-        if phrases and self.cfg.min_vocal_phrase_ms > 0:
-            min_len_samples = int(self.cfg.min_vocal_phrase_ms / 1000 * stem.sample_rate)
-            max_len_samples = int(self.cfg.max_vocal_phrase_ms / 1000 * stem.sample_rate)
-            phrases = self._merge_phrases_to_min_length(
-                phrases, min_len_samples, max_len_samples,
-            )
-            # Cap to max_vocal_phrases AFTER merging
-            phrases = phrases[: self.cfg.max_vocal_phrases]
-
-        if not phrases:
-            # Last resort: fall back to bar-aligned phrases (old behavior).
-            # Still better than nothing — the user gets *something* on vocal pads.
-            log.warning("Vocal phrase detection failed entirely; "
-                        "falling back to bar-aligned phrases")
-            return self._slice_distributed_loops(
-                stem, beats, 4,  # 4 bars
-                SampleCategory.VOCAL_PHRASE, "Vocal phrase (bar-aligned)",
-                audio, zc_window, bpm,
-            )
-
-        # 1) Full vocal phrases (natural-length, snapped to zero crossings)
         for i, (s, e) in enumerate(phrases):
-            s = max(0, min(s, stem.duration_samples))
-            e = max(0, min(e, stem.duration_samples))
-            if e <= s:
-                continue
-            # Snap start backward so we don't clip the consonant attack
             s_snap = self._snap(audio, s, zc_window, "backward")
             e_snap = self._snap(audio, e, zc_window, "nearest")
-            pos_pct = int(100 * s / max(1, stem.duration_samples))
-            dur_s = (e_snap - s_snap) / max(1, stem.sample_rate)
             out.append(self._mk_sample(
                 stem, s_snap, e_snap,
-                name=f"Vocal phrase {i+1} ({pos_pct}%, {dur_s:.1f}s)",
+                name=f"Vocal phrase {i+1}",
                 category=SampleCategory.VOCAL_PHRASE,
                 bpm=bpm,
             ))
-
-        # 2) Vocal chops: short percussive bits cut from the START of phrases.
-        #    These give the user playable one-shots that begin on a clean
-        #    word/consonant rather than mid-phrase.
-        chop_len = int(self.cfg.vocal_chop_length_ms / 1000 * stem.sample_rate)
-        n_chops = min(self.cfg.max_vocal_chops, len(phrases))
-        # Pick chops from phrases distributed across the track
-        if n_chops == 1:
-            chop_indices = [0]
-        elif n_chops > 0:
-            raw = np.linspace(0, len(phrases) - 1, n_chops)
-            chop_indices = sorted(set(int(round(x)) for x in raw))
-        else:
-            chop_indices = []
-
-        for i, idx in enumerate(chop_indices):
-            phrase_start, phrase_end = phrases[idx]
-            # Chop length is min(configured chop_len, length of the phrase itself)
-            chop_end = min(phrase_start + chop_len, phrase_end,
-                           stem.duration_samples)
-            if chop_end <= phrase_start:
-                continue
-            s_snap = self._snap(audio, phrase_start, zc_window, "backward")
-            e_snap = self._snap(audio, chop_end, zc_window, "nearest")
-            pos_pct = int(100 * phrase_start / max(1, stem.duration_samples))
-            out.append(self._mk_sample(
-                stem, s_snap, e_snap,
-                name=f"Vocal chop {i+1:02d} ({pos_pct}%)",
-                category=SampleCategory.VOCAL_CHOP,
-            ))
-
         return out
 
     # ---- Phrase merging -----------------------------------------------

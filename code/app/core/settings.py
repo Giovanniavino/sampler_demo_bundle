@@ -133,9 +133,13 @@ class PadLayoutSettings:
 class PlaybackSettings:
     sample_rate:          int  = 44100
     block_size:           int  = 512
-    press_hold_loop:      bool = True
+    press_hold_loop:      bool = False    # was True — turn off the bug magnet
     auto_choke_drums:     bool = True
     auto_normalize_stems: bool = False
+    # Noise reduction levels per stage: 'off' / 'light' / 'strong'
+    # Default light pre + off post — strong NR was killing the audio
+    nr_level_pre:  str = "light"
+    nr_level_post: str = "off"
 
     @property
     def latency_ms(self) -> float:
@@ -157,23 +161,27 @@ class AppSettings:
     def demucs_model(self) -> str:
         return "htdemucs" if self.quality_mode == "fast" else "htdemucs_ft"
 
+    # ---- Noise reduction (now user-controllable) -----------------------
+    # The playback settings hold the user-chosen NR level. The pipeline
+    # reads these properties to decide what to do.
+
     @property
     def noise_reduction_pre(self) -> bool:
-        """Always reduce noise before separation."""
-        return True
+        """Apply NR before separation if level is not 'off'."""
+        return self.playback.nr_level_pre != "off"
 
     @property
     def noise_reduction_post(self) -> bool:
-        """Reduce noise on each stem after separation only in quality mode."""
-        return self.quality_mode == "quality"
+        """Apply NR after separation (per-stem) if level is not 'off'."""
+        return self.playback.nr_level_post != "off"
 
     @property
     def nr_pre_profile(self) -> str:
-        return "fast" if self.quality_mode == "fast" else "quality_pre"
+        return self.playback.nr_level_pre
 
     @property
     def nr_post_profile(self) -> str:
-        return "quality_post"
+        return self.playback.nr_level_post
 
     # ---- Persistence --------------------------------------------------
 

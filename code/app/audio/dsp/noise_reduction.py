@@ -33,27 +33,33 @@ Profile = Literal["fast", "quality"]
 # ---------------------------------------------------------------------------
 
 _PROFILES: dict[str, dict] = {
-    "fast": dict(
+    # Conservative defaults. Previous values killed >80% of RMS in quality mode
+    # because we ran two passes (mix + per-stem) with high prop_decrease.
+    "off": None,                          # explicit no-op
+    "light": dict(
         stationary=False,
-        prop_decrease=0.60,       # how much noise to remove (0=none, 1=all)
-        time_constant_s=2.0,      # smoothing window in seconds
-        freq_mask_smooth_hz=500,  # frequency smoothing
+        prop_decrease=0.40,               # was 0.60
+        time_constant_s=2.5,
+        freq_mask_smooth_hz=600,
         n_std_thresh_stationary=1.5,
     ),
-    "quality_pre": dict(          # quality pass on the full mix
+    "strong": dict(
         stationary=False,
-        prop_decrease=0.70,
+        prop_decrease=0.65,               # was 0.85-0.88, way too much
         time_constant_s=1.5,
-        freq_mask_smooth_hz=300,
-        n_std_thresh_stationary=1.5,
+        freq_mask_smooth_hz=400,
+        n_std_thresh_stationary=1.3,
     ),
-    "quality_post": dict(         # quality pass on individual stems (more aggressive)
-        stationary=False,
-        prop_decrease=0.88,
-        time_constant_s=1.0,
-        freq_mask_smooth_hz=200,
-        n_std_thresh_stationary=1.2,
-    ),
+    # Legacy names kept for backwards compatibility — now alias to safer levels
+    "fast":         dict(stationary=False, prop_decrease=0.40,
+                          time_constant_s=2.5, freq_mask_smooth_hz=600,
+                          n_std_thresh_stationary=1.5),
+    "quality_pre":  dict(stationary=False, prop_decrease=0.45,
+                          time_constant_s=2.0, freq_mask_smooth_hz=500,
+                          n_std_thresh_stationary=1.5),
+    "quality_post": dict(stationary=False, prop_decrease=0.55,
+                          time_constant_s=1.5, freq_mask_smooth_hz=400,
+                          n_std_thresh_stationary=1.3),
 }
 
 
@@ -64,24 +70,27 @@ _PROFILES: dict[str, dict] = {
 def reduce_noise_array(
     audio: np.ndarray,
     sr: int,
-    profile: str = "fast",
+    profile: str = "light",
 ) -> np.ndarray:
     """
     Run noise reduction on a numpy array.
 
-    audio : (frames,) or (frames, channels) float32
-    sr    : sample rate
-    profile : one of 'fast', 'quality_pre', 'quality_post'
-
-    Returns same shape as input, float32.
+    profile: 'off' / 'light' / 'strong' (or legacy: 'fast', 'quality_pre', 'quality_post')
+    Returns same shape as input, float32. 'off' is a no-op.
     """
+    if profile == "off":
+        return audio.astype(np.float32)
+
     try:
         import noisereduce as nr
     except ImportError:
         log.warning("noisereduce not installed — skipping noise reduction")
-        return audio
+        return audio.astype(np.float32)
 
-    cfg = _PROFILES.get(profile, _PROFILES["fast"])
+    cfg = _PROFILES.get(profile)
+    if cfg is None:
+        log.warning("Unknown NR profile %r — skipping", profile)
+        return audio.astype(np.float32)
     mono = audio.ndim == 1
 
     if mono:

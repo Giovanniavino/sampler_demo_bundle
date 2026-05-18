@@ -149,6 +149,11 @@ class SamplerController(QObject):
         self._pad_model = PadGridModel()
         self._import_thread: Optional[QThread] = None
         self._hold_looping: dict[int, bool] = {}
+        # Time of last trigger per pad (for press-hold-loop). Engine sample
+        # rate so we can compute "is the sample over yet" cheaply.
+        self._trigger_time_samples: dict[int, int] = {}
+        self._trigger_sample_len: dict[int, int] = {}
+        self._trigger_wallclock: dict[int, float] = {}
         self._rebuild_engine()
 
     # ---- Helpers -------------------------------------------------------
@@ -275,6 +280,12 @@ class SamplerController(QObject):
     @pyqtProperty(bool, notify=settingsChanged)
     def autoChokeDrums(self): return self._settings.playback.auto_choke_drums
 
+    @pyqtProperty(str, notify=settingsChanged)
+    def nrLevelPre(self): return self._settings.playback.nr_level_pre
+
+    @pyqtProperty(str, notify=settingsChanged)
+    def nrLevelPost(self): return self._settings.playback.nr_level_post
+
     # ---- QML slots — quality mode -------------------------------------
 
     @pyqtSlot(str)
@@ -320,6 +331,11 @@ class SamplerController(QObject):
         self.engine.trigger_pad(pad, sample)
         self._pad_model.set_active(pad_index, True)
         self._hold_looping[pad_index] = False
+        # Record when this trigger happened and how long the sample is.
+        # Used by padHoldTick to wait until the sample actually finishes.
+        import time
+        self._trigger_wallclock[pad_index] = time.monotonic()
+        self._trigger_sample_len[pad_index] = sample.length_samples
 
     @pyqtSlot(int)
     def releasePad(self, pad_index: int):
@@ -337,6 +353,12 @@ class SamplerController(QObject):
 
     @pyqtSlot(int)
     def padHoldTick(self, pad_index: int):
+        """
+        Called periodically by QML while a pad is held down.
+        Only re-triggers in loop mode AFTER the original sample has ended.
+        Previously it was firing at 80ms after the press, causing a double
+        trigger that sounded like the sample played twice.
+        """
         if not self._settings.playback.press_hold_loop: return
         if not self._project or self._hold_looping.get(pad_index): return
         bank = self._project.active_bank()
@@ -345,13 +367,28 @@ class SamplerController(QObject):
         if not pad.sample_id: return
         sample = self._project.sample_by_id(pad.sample_id)
         if not sample: return
+
+        # Only trigger the hold-loop AFTER the original playback would end.
+        # Add a small safety margin (50ms) so we don't overlap.
+        import time
+        trigger_t = self._trigger_wallclock.get(pad_index, 0)
+        sample_len_samples = self._trigger_sample_len.get(pad_index, 0)
+        if not trigger_t or not sample_len_samples:
+            return
+        sample_dur_s = sample_len_samples / max(1, self.engine.sample_rate)
+        elapsed = time.monotonic() - trigger_t
+        # Add small grace period to avoid clicks
+        if elapsed < sample_dur_s - 0.05:
+            return  # not yet — sample still playing
+
         if pad.mode == PadMode.ONE_SHOT:
             old_mode = pad.mode
             pad.mode = PadMode.LOOP
             self.engine.trigger_pad(pad, sample)
             pad.mode = old_mode
             self._hold_looping[pad_index] = True
-            self._pad_model.notify_mode_changed(pad_index)
+            # Reset the timer so future ticks don't re-retrigger
+            self._trigger_wallclock[pad_index] = time.monotonic() + 999.0
 
     @pyqtSlot()
     def stopAll(self):
@@ -362,15 +399,14 @@ class SamplerController(QObject):
 
     @pyqtSlot(int)
     def cyclePadMode(self, pad_index: int):
+        """Cycle between ONE_SHOT and LOOP only (Hold/Gate available via
+        setPadMode for advanced users)."""
         if not self._project: return
         bank = self._project.active_bank()
         if not bank or not (0 <= pad_index < len(bank.pads)): return
         pad = bank.pads[pad_index]
         if not pad.sample_id: return
-        order = [PadMode.ONE_SHOT, PadMode.LOOP, PadMode.HOLD, PadMode.GATE]
-        try: i = order.index(pad.mode)
-        except ValueError: i = -1
-        pad.mode = order[(i + 1) % len(order)]
+        pad.mode = PadMode.LOOP if pad.mode == PadMode.ONE_SHOT else PadMode.ONE_SHOT
         self.engine.release_pad(pad)
         self._pad_model.notify_mode_changed(pad_index)
         self._set_status(f"Pad {pad_index + 1}: {pad.mode.value}")
@@ -490,15 +526,20 @@ class SamplerController(QObject):
         if self._project:
             self._reslice_with_new_settings()
 
-    @pyqtSlot(int, int, bool, bool, bool)
+    @pyqtSlot(int, int, bool, bool, bool, str, str)
     def applyPlaybackSettings(self, block_size, sample_rate,
-                              press_hold_loop, auto_normalize, auto_choke):
+                              press_hold_loop, auto_normalize, auto_choke,
+                              nr_level_pre, nr_level_post):
         pb = self._settings.playback
         pb.block_size           = int(block_size)
         pb.sample_rate          = int(sample_rate)
         pb.press_hold_loop      = bool(press_hold_loop)
         pb.auto_normalize_stems = bool(auto_normalize)
         pb.auto_choke_drums     = bool(auto_choke)
+        if nr_level_pre in ("off", "light", "strong"):
+            pb.nr_level_pre = nr_level_pre
+        if nr_level_post in ("off", "light", "strong"):
+            pb.nr_level_post = nr_level_post
         self._save_and_notify()
         self._rebuild_engine()
         if self._project:

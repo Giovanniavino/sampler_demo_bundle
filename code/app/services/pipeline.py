@@ -81,22 +81,29 @@ class SamplerPipeline:
         )
         project.sources.append(source)
 
-        # 2) Noise reduction — PRE separation (always)
+        # 2) Noise reduction — PRE separation (if enabled)
         sep_input = audio_path
+        original_source_path = source.path
         if self.settings.noise_reduction_pre:
-            rep(0.05, "Noise reduction (pre-separation)…")
-            tmp = Path(tempfile.mkdtemp()) / f"nr_pre_{audio_path.name}"
+            rep(0.05, f"Noise reduction (pre, {self.settings.nr_pre_profile})…")
+            # Put cleaned mix in cache_dir, not /tmp, so it survives across runs
+            # and doesn't break project save/load.
+            nr_dir = self.cache_dir / source.id
+            nr_dir.mkdir(parents=True, exist_ok=True)
+            tmp = nr_dir / f"_nr_pre_{audio_path.name}"
             try:
                 sep_input = reduce_noise_file(
                     audio_path,
                     profile=self.settings.nr_pre_profile,
                     out_path=tmp,
                 )
-                # Update source to point at cleaned file for analysis
+                # Use cleaned audio for analysis, but keep ORIGINAL path in
+                # the saved project (for portability across machines).
                 source.path = sep_input
             except Exception as e:
                 log.warning("Pre-separation NR failed: %s — using original", e)
                 sep_input = audio_path
+                source.path = original_source_path
 
         # 3) Stem separation
         rep(0.10, "Separating stems")
@@ -111,20 +118,26 @@ class SamplerPipeline:
             raise RuntimeError(f"Stem separation failed: {e}")
         project.stems.extend(stems)
 
-        # 4) Noise reduction — POST separation (quality mode only, per stem)
+        # 4) Noise reduction — POST separation (per stem, if enabled)
         if self.settings.noise_reduction_post:
             n = len(stems)
             for i, stem in enumerate(stems):
-                rep(0.62 + 0.08 * i / max(1, n),
-                    f"Noise reduction on {stem.stem_type.value}…")
+                rep(0.62 + 0.04 * i / max(1, n),
+                    f"Noise reduction (post, {self.settings.nr_post_profile}) "
+                    f"on {stem.stem_type.value}…")
                 try:
                     reduce_noise_file(
                         stem.path,
                         profile=self.settings.nr_post_profile,
-                        out_path=stem.path,   # in-place
+                        out_path=stem.path,
                     )
                 except Exception as e:
                     log.warning("Post-sep NR failed on %s: %s", stem.stem_type, e)
+
+        # 4b) Auto-normalize stems (now actually implemented)
+        if self.settings.playback.auto_normalize_stems:
+            rep(0.68, "Normalizing stems…")
+            self._normalize_stems(stems, target_dbfs=-3.0)
 
         # 5) Analysis
         rep(0.72, "Analyzing BPM, beats, sections…")
@@ -154,3 +167,32 @@ class SamplerPipeline:
             sum(1 for p in bank.pads if p.sample_id),
         )
         return project
+
+    # -------------------------------------------------------------------
+    # Helpers
+    # -------------------------------------------------------------------
+
+    def _normalize_stems(self, stems: list, target_dbfs: float = -3.0) -> None:
+        """
+        Normalize each stem so its peak hits target_dbfs.
+        Writes in place. Skips silent stems (peak too close to zero).
+        """
+        import numpy as np
+        target_peak = 10 ** (target_dbfs / 20.0)
+        for stem in stems:
+            try:
+                audio, sr = sf.read(str(stem.path), dtype="float32", always_2d=True)
+                peak = float(np.max(np.abs(audio)))
+                if peak < 0.001:
+                    log.info("Skipping normalize on %s (silent)", stem.stem_type.value)
+                    continue
+                gain = target_peak / peak
+                # Clamp to a sensible gain range so we don't over-amplify
+                # a near-silent stem and pull up its noise floor.
+                gain = min(gain, 8.0)  # +18 dB max
+                audio = (audio * gain).astype("float32")
+                sf.write(str(stem.path), audio, sr)
+                log.info("Normalized %s: peak %.3f -> %.3f (gain %.2fx)",
+                         stem.stem_type.value, peak, peak * gain, gain)
+            except Exception as e:
+                log.warning("Normalize failed on %s: %s", stem.stem_type.value, e)
