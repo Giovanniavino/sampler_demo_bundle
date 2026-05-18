@@ -1,5 +1,6 @@
 """
-QML-facing controller — updated with quality mode + preset settings.
+QML-facing controller — extended with full sample editor controls,
+waveform zoom, snap-to-beat, preview, and reset.
 """
 
 from __future__ import annotations
@@ -128,16 +129,18 @@ class ImportWorker(QObject):
 
 class SamplerController(QObject):
 
-    projectChanged   = pyqtSignal()
-    bpmChanged       = pyqtSignal()
-    statusChanged    = pyqtSignal()
-    importProgress   = pyqtSignal(float, str)
-    importDone       = pyqtSignal()
-    importError      = pyqtSignal(str)
-    settingsChanged  = pyqtSignal()
-    needsQualityMode = pyqtSignal()
-    sampleEditorOpen = pyqtSignal(int, str, float, float, float)
+    projectChanged       = pyqtSignal()
+    bpmChanged           = pyqtSignal()
+    statusChanged        = pyqtSignal()
+    importProgress       = pyqtSignal(float, str)
+    importDone           = pyqtSignal()
+    importError          = pyqtSignal(str)
+    settingsChanged      = pyqtSignal()
+    needsQualityMode     = pyqtSignal()
+    sampleEditorOpen     = pyqtSignal(int, str, float, float, float)
     currentSampleChanged = pyqtSignal()
+    editorParamsChanged  = pyqtSignal()
+    zoomChanged          = pyqtSignal()
 
     def __init__(self, cache_dir: Path, use_demucs: bool = True):
         super().__init__()
@@ -158,8 +161,14 @@ class SamplerController(QObject):
         # Current sample editor state ──────────────────────────────────
         self._current_pad_index: int = -1
         self._current_peaks: list[float] = []
-        # Cached stem audio so we don't re-decode every region change
         self._stem_peak_cache: dict[str, list[float]] = {}
+        # Snapshot of original parameters per sample.id for reset
+        self._sample_originals: dict[str, dict] = {}
+        # Waveform zoom window (fractions 0..1)
+        self._zoom_start: float = 0.0
+        self._zoom_end:   float = 1.0
+        # Snap markers to detected beats
+        self._snap_to_beats: bool = False
 
         self._rebuild_engine()
 
@@ -231,7 +240,6 @@ class SamplerController(QObject):
 
     @pyqtProperty(float, notify=currentSampleChanged)
     def currentSampleStartFrac(self):
-        """Sample start as fraction (0..1) of the source stem duration."""
         s = self._current_sample()
         if not s: return 0.0
         stem = self._project.stem_by_id(s.source_stem_id) if self._project else None
@@ -254,6 +262,78 @@ class SamplerController(QObject):
         if not stem: return 0.0
         return stem.duration_samples / max(1, stem.sample_rate)
 
+    # --- Editor: per-sample params (mirror the Sample dataclass) ---
+    @pyqtProperty(float, notify=editorParamsChanged)
+    def currentSampleGainDb(self):
+        s = self._current_sample()
+        return float(getattr(s, "gain_db", 0.0)) if s else 0.0
+
+    @pyqtProperty(float, notify=editorParamsChanged)
+    def currentSamplePitchSemitones(self):
+        s = self._current_sample()
+        return float(getattr(s, "pitch_semitones", 0.0)) if s else 0.0
+
+    @pyqtProperty(float, notify=editorParamsChanged)
+    def currentSampleTimeStretch(self):
+        s = self._current_sample()
+        return float(getattr(s, "time_stretch", 1.0)) if s else 1.0
+
+    @pyqtProperty(bool, notify=editorParamsChanged)
+    def currentSampleReverse(self):
+        s = self._current_sample()
+        return bool(getattr(s, "reverse", False)) if s else False
+
+    @pyqtProperty(float, notify=editorParamsChanged)
+    def currentSampleFadeInMs(self):
+        s = self._current_sample()
+        if not s: return 0.0
+        sr = getattr(self.engine, "sample_rate", 44100)
+        return getattr(s, "fade_in_samples", 0) / sr * 1000.0
+
+    @pyqtProperty(float, notify=editorParamsChanged)
+    def currentSampleFadeOutMs(self):
+        s = self._current_sample()
+        if not s: return 0.0
+        sr = getattr(self.engine, "sample_rate", 44100)
+        return getattr(s, "fade_out_samples", 0) / sr * 1000.0
+
+    # --- Beats for snap (positions as fractions 0..1 of stem duration) ---
+    @pyqtProperty(list, notify=currentSampleChanged)
+    def currentSampleBeats(self):
+        s = self._current_sample()
+        if not s or not self._project: return []
+        stem = self._project.stem_by_id(s.source_stem_id)
+        if not stem or stem.duration_samples <= 0: return []
+        analysis = next(
+            (a for a in self._project.analyses
+             if getattr(a, "source_id", None) == getattr(stem, "source_id", None)),
+            None,
+        )
+        if not analysis: return []
+        beats = getattr(analysis, "beats", None) or []
+        total = float(stem.duration_samples)
+        out = []
+        for b in beats:
+            pos = (
+                getattr(b, "start_samples", None)
+                or getattr(b, "position_samples", None)
+                or getattr(b, "sample", None)
+                or 0
+            )
+            f = pos / total
+            if 0.0 <= f <= 1.0:
+                out.append(float(f))
+        return out
+
+    @pyqtProperty(bool, notify=editorParamsChanged)
+    def snapToBeats(self): return self._snap_to_beats
+
+    @pyqtProperty(float, notify=zoomChanged)
+    def zoomStart(self): return self._zoom_start
+
+    @pyqtProperty(float, notify=zoomChanged)
+    def zoomEnd(self): return self._zoom_end
+
     @pyqtProperty(bool, notify=settingsChanged)
     def qualityModeChosen(self):
         return self._settings.quality_mode is not None
@@ -271,7 +351,6 @@ class SamplerController(QObject):
     @pyqtProperty(str, notify=settingsChanged)
     def loopPreset(self):  return self._settings.slicing.loop_preset
 
-    # Custom values (only used when preset == "Custom")
     @pyqtProperty(float, notify=settingsChanged)
     def minVocalPhraseMs(self): return self._settings.slicing.min_vocal_phrase_ms
     @pyqtProperty(float, notify=settingsChanged)
@@ -288,6 +367,9 @@ class SamplerController(QObject):
     def drumHitLengthMs(self): return self._settings.slicing.drum_hit_length_ms
     @pyqtProperty(int, notify=settingsChanged)
     def maxDrumHits(self): return self._settings.slicing.max_drum_hits
+    @pyqtProperty(float, notify=settingsChanged)
+    def drumHitMinSpacingBeats(self):
+        return self._settings.slicing.drum_hit_min_spacing_beats
     @pyqtProperty(int, notify=settingsChanged)
     def nLoopsPerStem(self): return self._settings.slicing.n_loops_per_stem
     @pyqtProperty(int, notify=settingsChanged)
@@ -337,7 +419,6 @@ class SamplerController(QObject):
 
     @pyqtSlot(str)
     def setQualityMode(self, mode: str):
-        """Called from first-launch dialog. mode: 'fast' or 'quality'."""
         if mode not in ("fast", "quality"):
             return
         self._settings.quality_mode = mode
@@ -349,7 +430,6 @@ class SamplerController(QObject):
 
     @pyqtSlot()
     def resetQualityMode(self):
-        """Let the user re-choose from settings."""
         self._settings.quality_mode = None
         self._settings.save(SETTINGS_PATH)
         self.settingsChanged.emit()
@@ -381,7 +461,6 @@ class SamplerController(QObject):
         import time
         self._trigger_wallclock[pad_index] = time.monotonic()
         self._trigger_sample_len[pad_index] = sample.length_samples
-        # Make this pad the current one in the editor
         self._set_current_pad(pad_index)
 
     @pyqtSlot(int)
@@ -400,12 +479,6 @@ class SamplerController(QObject):
 
     @pyqtSlot(int)
     def padHoldTick(self, pad_index: int):
-        """
-        Called periodically by QML while a pad is held down.
-        Only re-triggers in loop mode AFTER the original sample has ended.
-        Previously it was firing at 80ms after the press, causing a double
-        trigger that sounded like the sample played twice.
-        """
         if not self._settings.playback.press_hold_loop: return
         if not self._project or self._hold_looping.get(pad_index): return
         bank = self._project.active_bank()
@@ -414,9 +487,6 @@ class SamplerController(QObject):
         if not pad.sample_id: return
         sample = self._project.sample_by_id(pad.sample_id)
         if not sample: return
-
-        # Only trigger the hold-loop AFTER the original playback would end.
-        # Add a small safety margin (50ms) so we don't overlap.
         import time
         trigger_t = self._trigger_wallclock.get(pad_index, 0)
         sample_len_samples = self._trigger_sample_len.get(pad_index, 0)
@@ -424,17 +494,14 @@ class SamplerController(QObject):
             return
         sample_dur_s = sample_len_samples / max(1, self.engine.sample_rate)
         elapsed = time.monotonic() - trigger_t
-        # Add small grace period to avoid clicks
         if elapsed < sample_dur_s - 0.05:
-            return  # not yet — sample still playing
-
+            return
         if pad.mode == PadMode.ONE_SHOT:
             old_mode = pad.mode
             pad.mode = PadMode.LOOP
             self.engine.trigger_pad(pad, sample)
             pad.mode = old_mode
             self._hold_looping[pad_index] = True
-            # Reset the timer so future ticks don't re-retrigger
             self._trigger_wallclock[pad_index] = time.monotonic() + 999.0
 
     @pyqtSlot()
@@ -446,8 +513,6 @@ class SamplerController(QObject):
 
     @pyqtSlot(int)
     def cyclePadMode(self, pad_index: int):
-        """Cycle between ONE_SHOT and LOOP only (Hold/Gate available via
-        setPadMode for advanced users)."""
         if not self._project: return
         bank = self._project.active_bank()
         if not bank or not (0 <= pad_index < len(bank.pads)): return
@@ -470,7 +535,7 @@ class SamplerController(QObject):
         self.engine.release_pad(pad)
         self._pad_model.notify_mode_changed(pad_index)
 
-    # ---- QML slots — sample editor ------------------------------------
+    # ---- QML slots — sample editor (legacy 3-param flow kept) ---------
 
     @pyqtSlot(int)
     def openSampleEditor(self, pad_index: int):
@@ -503,10 +568,108 @@ class SamplerController(QObject):
         sample.fade_in_samples  = max(0, int(fade_in_ms  / 1000 * sr))
         sample.fade_out_samples = max(0, int(fade_out_ms / 1000 * sr))
         self.engine.register_sample(sample)
+        self.editorParamsChanged.emit()
         self._set_status(
             f"{sample.name}: {gain_db:+.1f} dB  "
             f"fade in {fade_in_ms:.0f}ms  fade out {fade_out_ms:.0f}ms"
         )
+
+    # ---- New: granular per-param slots for live UI control ------------
+
+    def _apply_to_current(self, mutator) -> Optional[Sample]:
+        """Apply `mutator(sample)` to the currently selected sample and
+        re-register it on the engine. Returns the sample or None."""
+        s = self._current_sample()
+        if not s: return None
+        self._ensure_originals(s)
+        mutator(s)
+        try:
+            self.engine.register_sample(s)
+        except Exception as e:
+            log.warning("register_sample failed: %s", e)
+        self.editorParamsChanged.emit()
+        return s
+
+    @pyqtSlot(float)
+    def setCurrentSampleGain(self, db: float):
+        self._apply_to_current(lambda s: setattr(s, "gain_db", float(db)))
+
+    @pyqtSlot(float)
+    def setCurrentSamplePitch(self, semitones: float):
+        self._apply_to_current(
+            lambda s: setattr(s, "pitch_semitones", float(semitones)))
+
+    @pyqtSlot(float)
+    def setCurrentSampleTimeStretch(self, factor: float):
+        f = max(0.25, min(4.0, float(factor)))
+        self._apply_to_current(lambda s: setattr(s, "time_stretch", f))
+
+    @pyqtSlot(bool)
+    def setCurrentSampleReverse(self, value: bool):
+        self._apply_to_current(lambda s: setattr(s, "reverse", bool(value)))
+
+    @pyqtSlot(float)
+    def setCurrentSampleFadeInMs(self, ms: float):
+        sr = self.engine.sample_rate
+        n  = max(0, int(float(ms) / 1000 * sr))
+        self._apply_to_current(lambda s: setattr(s, "fade_in_samples", n))
+
+    @pyqtSlot(float)
+    def setCurrentSampleFadeOutMs(self, ms: float):
+        sr = self.engine.sample_rate
+        n  = max(0, int(float(ms) / 1000 * sr))
+        self._apply_to_current(lambda s: setattr(s, "fade_out_samples", n))
+
+    @pyqtSlot()
+    def resetCurrentSample(self):
+        """Restore the original parameters captured when this pad was first
+        selected (start/end region included)."""
+        s = self._current_sample()
+        if not s: return
+        orig = self._sample_originals.get(s.id)
+        if not orig: return
+        for k, v in orig.items():
+            setattr(s, k, v)
+        try:
+            self.engine.register_sample(s)
+        except Exception:
+            pass
+        self.editorParamsChanged.emit()
+        self.currentSampleChanged.emit()
+        self._set_status(f"{s.name}: reset to defaults")
+
+    @pyqtSlot()
+    def previewCurrentSample(self):
+        """Trigger the current sample without changing pad selection state."""
+        if self._current_pad_index < 0 or not self._project: return
+        bank = self._project.active_bank()
+        if not bank: return
+        pad = bank.pads[self._current_pad_index]
+        s = self._current_sample()
+        if not s or not pad: return
+        try:
+            self.engine.trigger_pad(pad, s)
+        except Exception as e:
+            log.warning("preview failed: %s", e)
+
+    @pyqtSlot(bool)
+    def setSnapToBeats(self, value: bool):
+        self._snap_to_beats = bool(value)
+        self.editorParamsChanged.emit()
+
+    @pyqtSlot(float, float)
+    def setWaveformZoom(self, start_frac: float, end_frac: float):
+        a = max(0.0, min(1.0, float(start_frac)))
+        b = max(0.0, min(1.0, float(end_frac)))
+        if b - a < 0.02:  # minimum 2% zoom window
+            return
+        self._zoom_start, self._zoom_end = a, b
+        self.zoomChanged.emit()
+
+    @pyqtSlot()
+    def resetWaveformZoom(self):
+        self._zoom_start, self._zoom_end = 0.0, 1.0
+        self.zoomChanged.emit()
 
     # ---- QML slots — settings -----------------------------------------
 
@@ -596,7 +759,6 @@ class SamplerController(QObject):
 
     @pyqtSlot()
     def reslice(self):
-        """Re-run slicing+pad assignment with current settings (no re-separation)."""
         if self._project:
             self._reslice_with_new_settings()
 
@@ -617,6 +779,12 @@ class SamplerController(QObject):
         for s in self._project.samples:
             self.engine.register_sample(s)
         self._pad_model.set_pads(bank.pads)
+        # New samples → reset editor state and originals cache
+        self._sample_originals.clear()
+        self._current_pad_index = -1
+        self._current_peaks = []
+        self.currentSampleChanged.emit()
+        self.editorParamsChanged.emit()
         filled = sum(1 for p in bank.pads if p.sample_id)
         self._set_status(
             f"Re-sliced: {len(self._project.samples)} samples, "
@@ -663,11 +831,14 @@ class SamplerController(QObject):
             self._bpm = project.analyses[0].bpm
             self._key = project.analyses[0].key or ""
             self.bpmChanged.emit()
-        # Reset editor state for the new project
         self._stem_peak_cache.clear()
+        self._sample_originals.clear()
         self._current_pad_index = -1
         self._current_peaks = []
+        self._zoom_start, self._zoom_end = 0.0, 1.0
+        self.zoomChanged.emit()
         self.currentSampleChanged.emit()
+        self.editorParamsChanged.emit()
         self._set_status(f"Loaded — {len(project.samples)} samples ready.")
         self.projectChanged.emit()
         self.importDone.emit()
@@ -685,16 +856,35 @@ class SamplerController(QObject):
             return None
         return self._project.sample_by_id(pad.sample_id)
 
+    def _ensure_originals(self, sample: Sample):
+        if sample.id in self._sample_originals:
+            return
+        self._sample_originals[sample.id] = {
+            "start_sample":      getattr(sample, "start_sample", 0),
+            "end_sample":        getattr(sample, "end_sample", 0),
+            "gain_db":           getattr(sample, "gain_db", 0.0),
+            "pitch_semitones":   getattr(sample, "pitch_semitones", 0.0),
+            "time_stretch":      getattr(sample, "time_stretch", 1.0),
+            "reverse":           getattr(sample, "reverse", False),
+            "fade_in_samples":   getattr(sample, "fade_in_samples", 0),
+            "fade_out_samples":  getattr(sample, "fade_out_samples", 0),
+        }
+
     def _set_current_pad(self, pad_index: int):
         if pad_index == self._current_pad_index:
-            # Same pad — peaks already loaded; nothing to do
             return
         self._current_pad_index = pad_index
+        # Reset zoom on pad change for clarity
+        self._zoom_start, self._zoom_end = 0.0, 1.0
+        self.zoomChanged.emit()
         self._refresh_current_peaks()
+        s = self._current_sample()
+        if s:
+            self._ensure_originals(s)
         self.currentSampleChanged.emit()
+        self.editorParamsChanged.emit()
 
     def _refresh_current_peaks(self):
-        """Load (or fetch from cache) the stem-wide peaks for the current sample."""
         s = self._current_sample()
         if not s or not s.source_stem_id:
             self._current_peaks = []
@@ -714,7 +904,6 @@ class SamplerController(QObject):
 
     @pyqtSlot(int)
     def selectPad(self, pad_index: int):
-        """Make a pad current in the editor WITHOUT triggering it."""
         if not self._project: return
         bank = self._project.active_bank()
         if not bank or not (0 <= pad_index < len(bank.pads)): return
@@ -723,19 +912,17 @@ class SamplerController(QObject):
 
     @pyqtSlot(float, float)
     def setCurrentSampleRegion(self, start_frac: float, end_frac: float):
-        """Set the start/end region for the current sample (normalized 0..1)."""
         s = self._current_sample()
         if not s or not s.source_stem_id: return
         stem = self._project.stem_by_id(s.source_stem_id)
         if not stem: return
         a = max(0.0, min(1.0, min(start_frac, end_frac)))
         b = max(0.0, min(1.0, max(start_frac, end_frac)))
-        # Need at least 50ms duration
         min_samples = stem.sample_rate // 20
+        self._ensure_originals(s)
         s.start_sample = int(a * stem.duration_samples)
         s.end_sample = max(s.start_sample + min_samples,
                             int(b * stem.duration_samples))
-        # Re-render the buffer so playback reflects the new region immediately
         self.engine.register_sample(s)
         self.currentSampleChanged.emit()
 
