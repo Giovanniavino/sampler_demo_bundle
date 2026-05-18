@@ -135,8 +135,9 @@ class SamplerController(QObject):
     importDone       = pyqtSignal()
     importError      = pyqtSignal(str)
     settingsChanged  = pyqtSignal()
-    needsQualityMode = pyqtSignal()          # emitted when mode not yet chosen
+    needsQualityMode = pyqtSignal()
     sampleEditorOpen = pyqtSignal(int, str, float, float, float)
+    currentSampleChanged = pyqtSignal()
 
     def __init__(self, cache_dir: Path, use_demucs: bool = True):
         super().__init__()
@@ -146,14 +147,20 @@ class SamplerController(QObject):
         self._project: Optional[Project] = None
         self._status  = "Ready. Load a track to begin."
         self._bpm     = 0.0
+        self._key     = ""
         self._pad_model = PadGridModel()
         self._import_thread: Optional[QThread] = None
         self._hold_looping: dict[int, bool] = {}
-        # Time of last trigger per pad (for press-hold-loop). Engine sample
-        # rate so we can compute "is the sample over yet" cheaply.
         self._trigger_time_samples: dict[int, int] = {}
         self._trigger_sample_len: dict[int, int] = {}
         self._trigger_wallclock: dict[int, float] = {}
+
+        # Current sample editor state ──────────────────────────────────
+        self._current_pad_index: int = -1
+        self._current_peaks: list[float] = []
+        # Cached stem audio so we don't re-decode every region change
+        self._stem_peak_cache: dict[str, list[float]] = {}
+
         self._rebuild_engine()
 
     # ---- Helpers -------------------------------------------------------
@@ -201,11 +208,51 @@ class SamplerController(QObject):
     @pyqtProperty(float, notify=bpmChanged)
     def bpm(self): return self._bpm
 
+    @pyqtProperty(str, notify=bpmChanged)
+    def trackKey(self): return self._key
+
     @pyqtProperty(str, notify=projectChanged)
     def trackName(self):
         if self._project and self._project.sources:
             return Path(str(self._project.sources[0].path)).stem
         return ""
+
+    # --- Current sample editor properties ---
+    @pyqtProperty(int, notify=currentSampleChanged)
+    def currentPadIndex(self): return self._current_pad_index
+
+    @pyqtProperty(str, notify=currentSampleChanged)
+    def currentSampleName(self):
+        s = self._current_sample()
+        return s.name if s else ""
+
+    @pyqtProperty(list, notify=currentSampleChanged)
+    def currentPeaks(self): return self._current_peaks
+
+    @pyqtProperty(float, notify=currentSampleChanged)
+    def currentSampleStartFrac(self):
+        """Sample start as fraction (0..1) of the source stem duration."""
+        s = self._current_sample()
+        if not s: return 0.0
+        stem = self._project.stem_by_id(s.source_stem_id) if self._project else None
+        if not stem or stem.duration_samples <= 0: return 0.0
+        return max(0.0, min(1.0, s.start_sample / stem.duration_samples))
+
+    @pyqtProperty(float, notify=currentSampleChanged)
+    def currentSampleEndFrac(self):
+        s = self._current_sample()
+        if not s: return 1.0
+        stem = self._project.stem_by_id(s.source_stem_id) if self._project else None
+        if not stem or stem.duration_samples <= 0: return 1.0
+        return max(0.0, min(1.0, s.end_sample / stem.duration_samples))
+
+    @pyqtProperty(float, notify=currentSampleChanged)
+    def currentStemDurationSec(self):
+        s = self._current_sample()
+        if not s: return 0.0
+        stem = self._project.stem_by_id(s.source_stem_id) if self._project else None
+        if not stem: return 0.0
+        return stem.duration_samples / max(1, stem.sample_rate)
 
     @pyqtProperty(bool, notify=settingsChanged)
     def qualityModeChosen(self):
@@ -331,11 +378,11 @@ class SamplerController(QObject):
         self.engine.trigger_pad(pad, sample)
         self._pad_model.set_active(pad_index, True)
         self._hold_looping[pad_index] = False
-        # Record when this trigger happened and how long the sample is.
-        # Used by padHoldTick to wait until the sample actually finishes.
         import time
         self._trigger_wallclock[pad_index] = time.monotonic()
         self._trigger_sample_len[pad_index] = sample.length_samples
+        # Make this pad the current one in the editor
+        self._set_current_pad(pad_index)
 
     @pyqtSlot(int)
     def releasePad(self, pad_index: int):
@@ -614,10 +661,83 @@ class SamplerController(QObject):
             self._pad_model.set_pads(bank.pads)
         if project.analyses:
             self._bpm = project.analyses[0].bpm
+            self._key = project.analyses[0].key or ""
             self.bpmChanged.emit()
+        # Reset editor state for the new project
+        self._stem_peak_cache.clear()
+        self._current_pad_index = -1
+        self._current_peaks = []
+        self.currentSampleChanged.emit()
         self._set_status(f"Loaded — {len(project.samples)} samples ready.")
         self.projectChanged.emit()
         self.importDone.emit()
+
+    # ── Sample editor helpers ──────────────────────────────────────
+
+    def _current_sample(self):
+        if not self._project or self._current_pad_index < 0:
+            return None
+        bank = self._project.active_bank()
+        if not bank or self._current_pad_index >= len(bank.pads):
+            return None
+        pad = bank.pads[self._current_pad_index]
+        if not pad.sample_id:
+            return None
+        return self._project.sample_by_id(pad.sample_id)
+
+    def _set_current_pad(self, pad_index: int):
+        if pad_index == self._current_pad_index:
+            # Same pad — peaks already loaded; nothing to do
+            return
+        self._current_pad_index = pad_index
+        self._refresh_current_peaks()
+        self.currentSampleChanged.emit()
+
+    def _refresh_current_peaks(self):
+        """Load (or fetch from cache) the stem-wide peaks for the current sample."""
+        s = self._current_sample()
+        if not s or not s.source_stem_id:
+            self._current_peaks = []
+            return
+        cached = self._stem_peak_cache.get(s.source_stem_id)
+        if cached is not None:
+            self._current_peaks = cached
+            return
+        stem = self._project.stem_by_id(s.source_stem_id)
+        if not stem or not stem.path or not stem.path.exists():
+            self._current_peaks = []
+            return
+        from app.audio.dsp.waveform_peaks import compute_peaks
+        peaks = compute_peaks(stem.path, num_bins=400)
+        self._stem_peak_cache[s.source_stem_id] = peaks
+        self._current_peaks = peaks
+
+    @pyqtSlot(int)
+    def selectPad(self, pad_index: int):
+        """Make a pad current in the editor WITHOUT triggering it."""
+        if not self._project: return
+        bank = self._project.active_bank()
+        if not bank or not (0 <= pad_index < len(bank.pads)): return
+        if bank.pads[pad_index].sample_id:
+            self._set_current_pad(pad_index)
+
+    @pyqtSlot(float, float)
+    def setCurrentSampleRegion(self, start_frac: float, end_frac: float):
+        """Set the start/end region for the current sample (normalized 0..1)."""
+        s = self._current_sample()
+        if not s or not s.source_stem_id: return
+        stem = self._project.stem_by_id(s.source_stem_id)
+        if not stem: return
+        a = max(0.0, min(1.0, min(start_frac, end_frac)))
+        b = max(0.0, min(1.0, max(start_frac, end_frac)))
+        # Need at least 50ms duration
+        min_samples = stem.sample_rate // 20
+        s.start_sample = int(a * stem.duration_samples)
+        s.end_sample = max(s.start_sample + min_samples,
+                            int(b * stem.duration_samples))
+        # Re-render the buffer so playback reflects the new region immediately
+        self.engine.register_sample(s)
+        self.currentSampleChanged.emit()
 
     def _on_import_error(self, msg: str):
         self._set_status(f"Error: {msg}")
