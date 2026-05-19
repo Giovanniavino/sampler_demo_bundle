@@ -1,0 +1,44 @@
+name: Build Mac App
+
+on:
+  workflow_dispatch:   # avvio manuale con un click su GitHub
+
+jobs:
+  build:
+    runs-on: macos-13
+
+    steps:
+      - name: Scarica il codice
+        uses: actions/checkout@v4
+
+      - name: Installa Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Installa librerie audio di sistema
+        run: brew install portaudio rtmidi libsndfile
+
+      - name: Installa dipendenze Python
+        working-directory: code
+        run: |
+          pip install --upgrade pip
+          pip install pyinstaller PyQt6>=6.6 \
+            numpy scipy soundfile sounddevice \
+            mido python-rtmidi python-osc \
+            librosa noisereduce
+
+      - name: Build .app con PyInstaller
+        working-directory: code
+        run: pyinstaller sampler_mac.spec --noconfirm --clean --log-level WARN
+
+      - name: Crea DMG distribuibile
+        working-directory: code
+        run: chmod +x create_dmg.sh && ./create_dmg.sh
+
+      - name: Carica il DMG come artifact scaricabile
+        uses: actions/upload-artifact@v4
+        with:
+          name: SamplerDemo-Mac
+          path: code/dist/SamplerDemo.dmg
+          retention-days: 30
