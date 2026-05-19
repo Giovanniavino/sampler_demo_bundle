@@ -341,7 +341,7 @@ class AutoSlicer:
         out: list[Sample] = []
         if stem.path is None:
             return out
-        from app.audio.analysis.vocal_phrase import (
+        from code.app.audio.dsp.vocal_phrase import (
             PhraseDetectionConfig, detect_vocal_phrases,
         )
         phrase_cfg = PhraseDetectionConfig(

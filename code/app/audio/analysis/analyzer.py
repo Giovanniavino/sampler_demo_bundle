@@ -76,6 +76,10 @@ class LibrosaAnalyzer(Analyzer):
             self._section_detector = make_section_detector(prefer_allin1=True)
         sections = self._section_detector.detect(source.path)
 
+        # Key detection (Krumhansl-Schmuckler, ~1-2s on a 3min track)
+        from app.audio.analysis.key_detector import detect_key
+        key_label, _ = detect_key(source.path)
+
         return AnalysisResult(
             source_id=source.id,
             bpm=float(bpm),
@@ -83,6 +87,7 @@ class LibrosaAnalyzer(Analyzer):
             beats=beat_objs,
             sections=sections,
             transients=transients,
+            key=key_label,
         )
 
     # ---- Internals -----------------------------------------------------
