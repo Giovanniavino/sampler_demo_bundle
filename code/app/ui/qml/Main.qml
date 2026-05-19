@@ -24,7 +24,8 @@ ApplicationWindow {
 
     property bool showSettings: false
     property bool showSampleEdit: false
-    property int  settingsTab: 0  // 0=Slicing 1=PadLayout 2=Playback 3=Info
+    // 0=Slicing 1=PadLayout 2=Playback 3=MIDI/Analysis 4=Info
+    property int  settingsTab: 0
 
     FileDialog {
         id: fileDialog
@@ -101,7 +102,7 @@ ApplicationWindow {
     }
 
     // ════════════════════════════════════════════════════════════════
-    // Re-usable mini button component
+    // Re-usable mini button
     // ════════════════════════════════════════════════════════════════
     component MiniBtn: Rectangle {
         id: mb
@@ -172,10 +173,21 @@ ApplicationWindow {
 
             Item { Layout.fillWidth: true }
 
+            // Track info: name, BPM (fractional), time signature, key
             Text {
-                text: (controller.trackName || "No track")
-                    + (controller.bpm > 0 ? "  •  " + controller.bpm.toFixed(1) + " BPM" : "")
-                    + (controller.trackKey ? "  •  " + controller.trackKey : "")
+                text: {
+                    var name = controller.trackName || "No track"
+                    var bpm = controller.detectedBpm > 0
+                        ? controller.detectedBpm.toFixed(2) + " BPM"
+                        : (controller.bpm > 0 ? controller.bpm.toFixed(1) + " BPM" : "")
+                    var ts = controller.detectedTimeSignature
+                        && controller.detectedBpm > 0
+                        ? " (" + controller.detectedTimeSignature + ")" : ""
+                    var key = controller.detectedKeyEnglish || controller.trackKey || ""
+                    return name
+                        + (bpm ? "  •  " + bpm + ts : "")
+                        + (key ? "  •  " + key : "")
+                }
                 color: cText; font.pixelSize: 11
             }
         }
@@ -191,7 +203,6 @@ ApplicationWindow {
         color: cPanel
         visible: !showSettings && !showSampleEdit
 
-        // Header: pad badge + sample name + duration + toolbar
         Row {
             id: edHeader
             anchors.top: parent.top; anchors.left: parent.left
@@ -213,7 +224,7 @@ ApplicationWindow {
                 font.pixelSize: 12; font.bold: controller.currentSampleName !== ""
                 anchors.verticalCenter: parent.verticalCenter
                 elide: Text.ElideRight
-                width: 220
+                width: 180
             }
             Text {
                 visible: controller.currentSampleName !== ""
@@ -227,16 +238,15 @@ ApplicationWindow {
                 anchors.verticalCenter: parent.verticalCenter
             }
 
-            Item { width: 8; height: 1 }
+            Item { width: 6; height: 1 }
 
-            // ── Toolbar: zoom out / zoom in / fit / snap / edit ──────
+            // Zoom controls
             MiniBtn {
                 anchors.verticalCenter: parent.verticalCenter
                 label: "−"; selColor: cBorder
                 enabled: controller.currentSampleName !== ""
                 opacity: enabled ? 1.0 : 0.4
                 onClicked: {
-                    // Zoom out 2× around the centre of current zoom
                     var z0 = controller.zoomStart
                     var z1 = controller.zoomEnd
                     var c = (z0 + z1) / 2
@@ -253,7 +263,6 @@ ApplicationWindow {
                 enabled: controller.currentSampleName !== ""
                 opacity: enabled ? 1.0 : 0.4
                 onClicked: {
-                    // Zoom in to the current sample region with 10% padding
                     var s = controller.currentSampleStartFrac
                     var e = controller.currentSampleEndFrac
                     var pad = Math.max(0.02, (e - s) * 0.15)
@@ -276,11 +285,20 @@ ApplicationWindow {
             }
             MiniBtn {
                 anchors.verticalCenter: parent.verticalCenter
-                label: "▶ Preview"
+                label: "▶"
                 selColor: cGreen
                 enabled: controller.currentSampleName !== ""
                 opacity: enabled ? 1.0 : 0.4
                 onClicked: controller.previewCurrentSample()
+            }
+            // NEW: Analyze button — runs AI analysis on the current sample
+            MiniBtn {
+                anchors.verticalCenter: parent.verticalCenter
+                label: "🎨 Analyze"
+                selColor: cYellow
+                enabled: controller.currentSampleName !== ""
+                opacity: enabled ? 1.0 : 0.4
+                onClicked: controller.analyzeSampleForAnnotations()
             }
             MiniBtn {
                 anchors.verticalCenter: parent.verticalCenter
@@ -301,7 +319,6 @@ ApplicationWindow {
             border.color: cBorder; border.width: 1
             clip: true
 
-            // JS helper: snap a normalized fraction to nearest beat if enabled
             function snapFrac(f) {
                 if (!controller.snapToBeats) return f
                 var beats = controller.currentSampleBeats
@@ -311,11 +328,9 @@ ApplicationWindow {
                     var d = Math.abs(beats[i] - f)
                     if (d < bestD) { bestD = d; best = beats[i] }
                 }
-                // Snap only if within ~3% of total duration
                 return bestD < 0.03 ? best : f
             }
 
-            // Convert visible-x coords to absolute frac and vice versa
             function visToFrac(xPx) {
                 var z0 = controller.zoomStart, z1 = controller.zoomEnd
                 return z0 + (xPx / width) * (z1 - z0)
@@ -375,7 +390,6 @@ ApplicationWindow {
                     ctx.fillStyle = "#2E2E3A"
                     ctx.fillRect(0, mid - 0.5, width, 1)
 
-                    // Beat ticks (when snap is on)
                     if (snap && beats && beats.length > 0) {
                         ctx.fillStyle = "#F1C40F66"
                         for (var k = 0; k < beats.length; k++) {
@@ -384,6 +398,49 @@ ApplicationWindow {
                             var bx = ((bf - zStart) / (zEnd - zStart)) * width
                             ctx.fillRect(bx - 0.5, 0, 1, height)
                         }
+                    }
+                }
+            }
+
+            // NEW: Annotation overlay strip (top edge of waveform)
+            Repeater {
+                model: controller.annotationModel
+                delegate: Rectangle {
+                    visible: model.endFrac > controller.zoomStart
+                        && model.startFrac < controller.zoomEnd
+                    x: wfBg.fracToVis(Math.max(model.startFrac, controller.zoomStart))
+                    width: Math.max(2,
+                        wfBg.fracToVis(Math.min(model.endFrac, controller.zoomEnd))
+                        - wfBg.fracToVis(Math.max(model.startFrac, controller.zoomStart)))
+                    // Position CORE annotations at the bottom, others at top
+                    y: model.kind === "core" ? wfBg.height - 8 : 0
+                    height: 6
+                    color: model.color
+                    opacity: 0.85
+                    radius: 2
+
+                    // Tooltip-ish label on hover
+                    Rectangle {
+                        visible: mouseAr.containsMouse
+                        x: 0; y: parent.height + 2
+                        width: lblTxt.width + 8
+                        height: lblTxt.height + 4
+                        color: cCard
+                        border.color: parent.color
+                        radius: 3
+                        z: 99
+                        Text {
+                            id: lblTxt
+                            anchors.centerIn: parent
+                            text: model.label
+                            color: cText
+                            font.pixelSize: 9
+                        }
+                    }
+                    MouseArea {
+                        id: mouseAr
+                        anchors.fill: parent
+                        hoverEnabled: true
                     }
                 }
             }
@@ -464,7 +521,7 @@ ApplicationWindow {
                 }
             }
 
-            // ── Pinch-to-zoom (touchscreen) ──────────────────────────
+            // Pinch-to-zoom
             PinchHandler {
                 target: null
                 acceptedDevices: PointerDevice.TouchScreen | PointerDevice.TouchPad
@@ -476,20 +533,17 @@ ApplicationWindow {
                 }
                 onActiveScaleChanged: if (active) {
                     var origSpan = _z1 - _z0
-                    // Centre of pinch in absolute frac (using start snapshot)
                     var cx = _z0 + (centroid.position.x / wfBg.width) * origSpan
                     var newSpan = Math.max(0.02,
                         Math.min(1.0, origSpan / Math.max(0.01, activeScale)))
                     var ns = cx - newSpan / 2
                     var ne = cx + newSpan / 2
-                    // Clamp & shift to keep inside [0,1]
                     if (ns < 0.0) { ne = Math.min(1.0, ne - ns); ns = 0.0 }
                     if (ne > 1.0) { ns = Math.max(0.0, ns - (ne - 1.0)); ne = 1.0 }
                     controller.setWaveformZoom(ns, ne)
                 }
             }
 
-            // ── Wheel: Ctrl+scroll = zoom, plain scroll = pan ─────────
             WheelHandler {
                 target: null
                 grabPermissions: PointerHandler.CanTakeOverFromAnything
@@ -498,7 +552,6 @@ ApplicationWindow {
                     var z1   = controller.zoomEnd
                     var span = z1 - z0
                     if (event.modifiers & Qt.ControlModifier) {
-                        // Zoom centred on cursor position
                         var cx = z0 + (event.x / wfBg.width) * span
                         var factor = event.angleDelta.y > 0 ? 0.75 : 1.33
                         var ns = cx - (cx - z0) * factor
@@ -507,7 +560,6 @@ ApplicationWindow {
                         if (ne > 1.0) { ns = Math.max(0.0, ns - (ne - 1.0)); ne = 1.0 }
                         if (ne - ns >= 0.02) controller.setWaveformZoom(ns, ne)
                     } else {
-                        // Pan: horizontal scroll preferred, fall back to vertical
                         var ang = event.angleDelta.x !== 0
                             ? event.angleDelta.x : -event.angleDelta.y
                         var dFrac = (ang / 1200.0) * span * 3
@@ -521,7 +573,7 @@ ApplicationWindow {
     }
 
     // ════════════════════════════════════════════════════════════════
-    // PAD GRID — scrollable when gridSize > what fits
+    // PAD GRID
     // ════════════════════════════════════════════════════════════════
     Item {
         id: padArea
@@ -531,18 +583,13 @@ ApplicationWindow {
         anchors.margins: 4
         visible: !showSettings && !showSampleEdit
 
-        // Column count: 4 for ≤16, 5 for 17–25, 6 above that
         property int cols: controller.gridSize <= 16 ? 4
                             : (controller.gridSize <= 25 ? 5 : 6)
         property int rowsNeeded: Math.ceil(controller.gridSize / cols)
         property real cellW: width / cols
-        // Cell height: ideal fit if it leaves a square-ish ratio,
-        // otherwise use a comfortable minimum and let the grid scroll.
         property real cellH: {
             var idealH = height / rowsNeeded
-            // Don't let cells get taller than wide (looks weird)
             var maxH = cellW
-            // Keep usable touch target
             var minH = 60
             return Math.max(minH, Math.min(idealH, maxH))
         }
@@ -649,7 +696,7 @@ ApplicationWindow {
     }
 
     // ════════════════════════════════════════════════════════════════
-    // SAMPLE EDIT OVERLAY — gain / pitch / stretch / reverse / fades
+    // SAMPLE EDIT OVERLAY
     // ════════════════════════════════════════════════════════════════
     Rectangle {
         anchors.fill: parent
@@ -658,7 +705,6 @@ ApplicationWindow {
         Column {
             anchors.fill: parent; anchors.margins: 12; spacing: 8
 
-            // Header row
             Row {
                 width: parent.width; spacing: 8
                 Text { text: "Sample Editor"; color: cText
@@ -697,14 +743,12 @@ ApplicationWindow {
 
             Rectangle { width: parent.width; height: 1; color: cBorder }
 
-            // Sliders area
             GridLayout {
                 width: parent.width
                 columns: 2
                 columnSpacing: 24
                 rowSpacing: 10
 
-                // Gain
                 Column {
                     Layout.fillWidth: true; spacing: 4
                     Row { width: parent.width
@@ -725,7 +769,6 @@ ApplicationWindow {
                         onMoved: controller.setCurrentSampleGain(value)
                     }
                 }
-                // Pitch
                 Column {
                     Layout.fillWidth: true; spacing: 4
                     Row { width: parent.width
@@ -745,7 +788,6 @@ ApplicationWindow {
                         onMoved: controller.setCurrentSamplePitch(value)
                     }
                 }
-                // Time stretch
                 Column {
                     Layout.fillWidth: true; spacing: 4
                     Row { width: parent.width
@@ -764,7 +806,6 @@ ApplicationWindow {
                         onMoved: controller.setCurrentSampleTimeStretch(value)
                     }
                 }
-                // Reverse toggle
                 Column {
                     Layout.fillWidth: true; spacing: 4
                     Text { text: "Reverse"; color: cText
@@ -782,7 +823,6 @@ ApplicationWindow {
                         }
                     }
                 }
-                // Fade in
                 Column {
                     Layout.fillWidth: true; spacing: 4
                     Row { width: parent.width
@@ -801,7 +841,6 @@ ApplicationWindow {
                         onMoved: controller.setCurrentSampleFadeInMs(value)
                     }
                 }
-                // Fade out
                 Column {
                     Layout.fillWidth: true; spacing: 4
                     Row { width: parent.width
@@ -832,13 +871,12 @@ ApplicationWindow {
     }
 
     // ════════════════════════════════════════════════════════════════
-    // SETTINGS OVERLAY — 4 tabs
+    // SETTINGS OVERLAY — 5 tabs
     // ════════════════════════════════════════════════════════════════
     Rectangle {
         anchors.fill: parent
         color: cBg; visible: showSettings; z: 10
 
-        // Tab bar
         Row {
             id: tabBar
             anchors.top: parent.top
@@ -847,20 +885,20 @@ ApplicationWindow {
             height: 28; spacing: 4
 
             Repeater {
-                model: ["Slicing", "Pad Layout", "Playback", "Info"]
+                model: ["Slicing", "Pad Layout", "Playback", "MIDI/AI", "Info"]
                 delegate: Rectangle {
-                    width: 110; height: 28; radius: 6
+                    width: 95; height: 28; radius: 6
                     color: settingsTab === index ? cAccent : cCard
                     border.color: settingsTab === index ? cAccent : cBorder
                     Text { anchors.centerIn: parent
                         text: modelData; color: cText
-                        font.pixelSize: 12
+                        font.pixelSize: 11
                         font.bold: settingsTab === index }
                     MouseArea { anchors.fill: parent
                         onClicked: settingsTab = index }
                 }
             }
-            Item { width: 16; height: 1 }
+            Item { width: 8; height: 1 }
             Rectangle {
                 width: 32; height: 28; radius: 6
                 color: closeM.containsMouse ? cRed : cCard
@@ -873,7 +911,6 @@ ApplicationWindow {
             }
         }
 
-        // Tab content (scrollable)
         Flickable {
             anchors.top: tabBar.bottom; anchors.topMargin: 6
             anchors.left: parent.left; anchors.right: parent.right
@@ -888,12 +925,11 @@ ApplicationWindow {
                 width: parent.width
                 spacing: 10
 
-                // ──── TAB 0: SLICING ──────────────────────────────────
+                // ──── TAB 0: SLICING ────
                 Column {
                     visible: settingsTab === 0
                     width: parent.width; spacing: 12
 
-                    // Vocal preset
                     Column { width: parent.width; spacing: 4
                         Text { text: "Vocal Phrases"; color: cText
                             font.pixelSize: 13; font.bold: true }
@@ -909,7 +945,6 @@ ApplicationWindow {
                                     onClicked: controller.applyVocalPreset(modelData) }
                             }
                         }
-                        // Custom fields
                         GridLayout {
                             visible: controller.vocalPreset === "Custom"
                             width: parent.width
@@ -949,7 +984,6 @@ ApplicationWindow {
 
                     Rectangle { width: parent.width; height: 1; color: cBorder }
 
-                    // Drum preset
                     Column { width: parent.width; spacing: 4
                         Text { text: "Drum Hits"; color: cText
                             font.pixelSize: 13; font.bold: true }
@@ -979,8 +1013,6 @@ ApplicationWindow {
                                 from: 1; to: 32; value: controller.maxDrumHits }
                             SpinBox { id: dSpc
                                 from: 0; to: 16
-                                property real realVal: 1.0
-                                // Stored as ints in SpinBox; treat as 0.25 steps
                                 value: Math.round(controller.drumHitMinSpacingBeats * 4)
                                 textFromValue: function(v) { return (v/4).toFixed(2) }
                             }
@@ -995,7 +1027,6 @@ ApplicationWindow {
 
                     Rectangle { width: parent.width; height: 1; color: cBorder }
 
-                    // Loops preset
                     Column { width: parent.width; spacing: 4
                         Text { text: "Loops"; color: cText
                             font.pixelSize: 13; font.bold: true }
@@ -1044,7 +1075,7 @@ ApplicationWindow {
                     }
                 }
 
-                // ──── TAB 1: PAD LAYOUT ───────────────────────────────
+                // ──── TAB 1: PAD LAYOUT ────
                 Column {
                     visible: settingsTab === 1
                     width: parent.width; spacing: 10
@@ -1110,7 +1141,7 @@ ApplicationWindow {
                     }
                 }
 
-                // ──── TAB 2: PLAYBACK ─────────────────────────────────
+                // ──── TAB 2: PLAYBACK ────
                 Column {
                     visible: settingsTab === 2
                     width: parent.width; spacing: 10
@@ -1227,9 +1258,206 @@ ApplicationWindow {
                     }
                 }
 
-                // ──── TAB 3: INFO ─────────────────────────────────────
+                // ──── TAB 3: MIDI / AI ANALYSIS (NEW) ────
                 Column {
                     visible: settingsTab === 3
+                    width: parent.width; spacing: 12
+
+                    // MIDI Keyboard Detection
+                    Text { text: "MIDI Keyboard"; color: cText
+                        font.pixelSize: 14; font.bold: true }
+                    Text {
+                        text: "Auto-detect connected MIDI keyboards and "
+                            + "classify them by key count."
+                        color: cMuted; font.pixelSize: 10
+                        wrapMode: Text.WordWrap; width: parent.width
+                    }
+
+                    Row { spacing: 8
+                        MiniBtn {
+                            label: "🔍 Detect MIDI Keyboards"
+                            selected: true; selColor: cAccent
+                            onClicked: controller.detectMidiKeyboards()
+                        }
+                    }
+
+                    // List of detected keyboards
+                    Rectangle {
+                        width: parent.width
+                        height: Math.min(120, kbList.contentHeight + 8)
+                        color: cCard; radius: 6
+                        border.color: cBorder; border.width: 1
+                        visible: kbList.count > 0
+
+                        ListView {
+                            id: kbList
+                            anchors.fill: parent; anchors.margins: 4
+                            model: controller.midiKeyboardModel
+                            clip: true
+                            spacing: 2
+
+                            delegate: Rectangle {
+                                width: kbList.width; height: 28; radius: 4
+                                color: model.isSelected ? cAccent : "transparent"
+                                Row {
+                                    anchors.fill: parent; anchors.margins: 6
+                                    spacing: 8
+                                    Text {
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        text: model.isSelected ? "●" : "○"
+                                        color: model.isSelected ? "white" : cMuted
+                                        font.pixelSize: 12
+                                    }
+                                    Text {
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        text: model.displayName
+                                        color: model.isSelected ? "white" : cText
+                                        font.pixelSize: 11
+                                        font.bold: model.isSelected
+                                    }
+                                    Item { width: 1; height: 1 }
+                                    Text {
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        text: "(" + model.portName + ")"
+                                        color: model.isSelected ? "#FFFFFFAA" : cMuted
+                                        font.pixelSize: 9
+                                        elide: Text.ElideRight
+                                    }
+                                }
+                                MouseArea {
+                                    anchors.fill: parent
+                                    onClicked: controller.selectMidiKeyboard(index)
+                                }
+                            }
+                        }
+                    }
+
+                    Text {
+                        visible: kbList.count === 0
+                        text: "No MIDI keyboards detected. Tap '🔍 Detect' to scan."
+                        color: cMuted; font.pixelSize: 10; font.italic: true
+                    }
+
+                    Rectangle { width: parent.width; height: 1; color: cBorder }
+
+                    // BPM & Key Detection
+                    Text { text: "BPM & Key Detection"; color: cText
+                        font.pixelSize: 14; font.bold: true }
+                    Text {
+                        text: "Fractional BPM, time signature, and musical key "
+                            + "with bilingual labels (EN / IT)."
+                        color: cMuted; font.pixelSize: 10
+                        wrapMode: Text.WordWrap; width: parent.width
+                    }
+
+                    Row { spacing: 8
+                        MiniBtn {
+                            label: "🎵 Detect BPM & Key"
+                            selected: true; selColor: cAccent
+                            onClicked: controller.detectBpmOfCurrentSource()
+                        }
+                    }
+
+                    // Detection results
+                    GridLayout {
+                        visible: controller.detectedBpm > 0
+                        width: parent.width
+                        columns: 2; rowSpacing: 6; columnSpacing: 16
+
+                        Text { text: "BPM:"; color: cMuted; font.pixelSize: 11 }
+                        Text { text: controller.detectedBpm.toFixed(2)
+                            color: cAccent; font.pixelSize: 14; font.bold: true }
+
+                        Text { text: "Time signature:"; color: cMuted; font.pixelSize: 11 }
+                        Text { text: controller.detectedTimeSignature
+                            color: cText; font.pixelSize: 12; font.bold: true }
+
+                        Text { text: "Confidence:"; color: cMuted; font.pixelSize: 11 }
+                        Row { spacing: 6
+                            Text {
+                                text: (controller.bpmConfidence * 100).toFixed(0) + "%"
+                                color: controller.bpmConfidence > 0.7
+                                    ? cGreen : (controller.bpmConfidence > 0.4
+                                        ? cOrange : cRed)
+                                font.pixelSize: 12; font.bold: true
+                            }
+                            Rectangle {
+                                width: 80; height: 8; radius: 3
+                                color: cBorder
+                                anchors.verticalCenter: parent.verticalCenter
+                                Rectangle {
+                                    width: parent.width * controller.bpmConfidence
+                                    height: parent.height; radius: 3
+                                    color: controller.bpmConfidence > 0.7
+                                        ? cGreen : (controller.bpmConfidence > 0.4
+                                            ? cOrange : cRed)
+                                }
+                            }
+                        }
+
+                        Text { text: "Key (English):"; color: cMuted; font.pixelSize: 11 }
+                        Text { text: controller.detectedKeyEnglish || "—"
+                            color: cText; font.pixelSize: 12; font.bold: true }
+
+                        Text { text: "Tonalità (IT):"; color: cMuted; font.pixelSize: 11 }
+                        Text { text: controller.detectedKeyItalian || "—"
+                            color: cText; font.pixelSize: 12; font.bold: true }
+                    }
+
+                    Rectangle { width: parent.width; height: 1; color: cBorder }
+
+                    // Sample Analysis Legend
+                    Text { text: "Sample AI Analysis"; color: cText
+                        font.pixelSize: 14; font.bold: true }
+                    Text {
+                        text: "Tap '🎨 Analyze' on the waveform toolbar to detect "
+                            + "phrases, hits, breaks, and core regions automatically."
+                        color: cMuted; font.pixelSize: 10
+                        wrapMode: Text.WordWrap; width: parent.width
+                    }
+
+                    // Color legend
+                    Column {
+                        width: parent.width; spacing: 4
+
+                        Row { spacing: 8
+                            Rectangle { width: 16; height: 8; radius: 2
+                                color: "#3D8EF0"  // BLUE
+                                anchors.verticalCenter: parent.verticalCenter }
+                            Text { text: "Phrase — vocal/melodic"
+                                color: cText; font.pixelSize: 11
+                                anchors.verticalCenter: parent.verticalCenter }
+                        }
+                        Row { spacing: 8
+                            Rectangle { width: 16; height: 8; radius: 2
+                                color: "#E74C3C"  // RED
+                                anchors.verticalCenter: parent.verticalCenter }
+                            Text { text: "Hit — drum/percussion"
+                                color: cText; font.pixelSize: 11
+                                anchors.verticalCenter: parent.verticalCenter }
+                        }
+                        Row { spacing: 8
+                            Rectangle { width: 16; height: 8; radius: 2
+                                color: "#7878A0"  // GRAY
+                                anchors.verticalCenter: parent.verticalCenter }
+                            Text { text: "Break — silence > 200ms"
+                                color: cText; font.pixelSize: 11
+                                anchors.verticalCenter: parent.verticalCenter }
+                        }
+                        Row { spacing: 8
+                            Rectangle { width: 16; height: 8; radius: 2
+                                color: "#F1C40F"  // YELLOW
+                                anchors.verticalCenter: parent.verticalCenter }
+                            Text { text: "Core — essence of phrase (highlight)"
+                                color: cText; font.pixelSize: 11
+                                anchors.verticalCenter: parent.verticalCenter }
+                        }
+                    }
+                }
+
+                // ──── TAB 4: INFO ────
+                Column {
+                    visible: settingsTab === 4
                     width: parent.width; spacing: 10
 
                     Text { text: "Processing Mode"; color: cText
@@ -1267,7 +1495,7 @@ ApplicationWindow {
                     }
 
                     Text {
-                        text: "Sampler v4 — settings persist to data/settings.json"
+                        text: "Sampler v5 — settings persist to data/settings.json"
                         color: cBorder; font.pixelSize: 9
                     }
                 }

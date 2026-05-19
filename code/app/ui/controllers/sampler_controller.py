@@ -1,6 +1,11 @@
 """
-QML-facing controller — extended with full sample editor controls,
-waveform zoom, snap-to-beat, preview, and reset.
+QML-facing controller — INTEGRATED with:
+  - MIDI keyboard auto-detection & classification
+  - Fractional BPM detection with time signature & confidence
+  - AI-powered sample analysis (phrase/hit/break detection with colors)
+  - Bilingual key detection (EN/IT)
+
+All new features exposed via PyQt signals/properties for QML visualization.
 """
 
 from __future__ import annotations
@@ -97,6 +102,114 @@ class PadGridModel(QAbstractListModel):
 
 
 # ---------------------------------------------------------------------------
+# Annotation model (for sample analysis results)
+# ---------------------------------------------------------------------------
+
+class AnnotationModel(QAbstractListModel):
+    """Exposes sample annotations (phrases, hits, breaks, cores) to QML."""
+    StartRole   = Qt.ItemDataRole.UserRole + 1
+    EndRole     = Qt.ItemDataRole.UserRole + 2
+    KindRole    = Qt.ItemDataRole.UserRole + 3
+    ColorRole   = Qt.ItemDataRole.UserRole + 4
+    LabelRole   = Qt.ItemDataRole.UserRole + 5
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._annotations = []
+
+    def roleNames(self):
+        return {
+            self.StartRole:  b"startFrac",
+            self.EndRole:    b"endFrac",
+            self.KindRole:   b"kind",
+            self.ColorRole:  b"color",
+            self.LabelRole:  b"label",
+        }
+
+    def rowCount(self, parent=QModelIndex()):
+        return len(self._annotations)
+
+    def data(self, index, role):
+        if not index.isValid():
+            return None
+        ann = self._annotations[index.row()]
+        if role == self.StartRole:  return ann.get("start_frac", 0.0)
+        if role == self.EndRole:    return ann.get("end_frac", 1.0)
+        if role == self.KindRole:   return ann.get("kind", "")
+        if role == self.ColorRole:  return ann.get("color", "#888888")
+        if role == self.LabelRole:  return ann.get("label", "")
+        return None
+
+    def set_annotations(self, annotations: list[dict]):
+        """Set list of annotation dicts with keys:
+        start_frac, end_frac, kind, color, label"""
+        self.beginResetModel()
+        self._annotations = annotations
+        self.endResetModel()
+
+
+# ---------------------------------------------------------------------------
+# MIDI Keyboard model
+# ---------------------------------------------------------------------------
+
+class MidiKeyboardModel(QAbstractListModel):
+    """Lists available MIDI keyboards."""
+    PortNameRole     = Qt.ItemDataRole.UserRole + 1
+    DisplayNameRole  = Qt.ItemDataRole.UserRole + 2
+    KeyCountRole     = Qt.ItemDataRole.UserRole + 3
+    IsSelectedRole   = Qt.ItemDataRole.UserRole + 4
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._keyboards = []
+        self._selected_idx = -1
+
+    def roleNames(self):
+        return {
+            self.PortNameRole:    b"portName",
+            self.DisplayNameRole: b"displayName",
+            self.KeyCountRole:    b"keyCount",
+            self.IsSelectedRole:  b"isSelected",
+        }
+
+    def rowCount(self, parent=QModelIndex()):
+        return len(self._keyboards)
+
+    def data(self, index, role):
+        if not index.isValid():
+            return None
+        kb = self._keyboards[index.row()]
+        if role == self.PortNameRole:     return kb.get("port_name", "")
+        if role == self.DisplayNameRole:  return kb.get("display_name", "")
+        if role == self.KeyCountRole:     return kb.get("key_count", 0)
+        if role == self.IsSelectedRole:   return index.row() == self._selected_idx
+        return None
+
+    def set_keyboards(self, keyboards: list[dict]):
+        """Set list of keyboard dicts with keys:
+        port_name, display_name, key_count"""
+        self.beginResetModel()
+        self._keyboards = keyboards
+        self._selected_idx = 0 if keyboards else -1
+        self.endResetModel()
+
+    def select_keyboard(self, index: int):
+        if 0 <= index < len(self._keyboards):
+            old_idx = self._selected_idx
+            self._selected_idx = index
+            if old_idx >= 0:
+                idx = self.index(old_idx, 0)
+                self.dataChanged.emit(idx, idx, [self.IsSelectedRole])
+            idx = self.index(index, 0)
+            self.dataChanged.emit(idx, idx, [self.IsSelectedRole])
+
+    def selected_keyboard(self) -> Optional[dict]:
+        if 0 <= self._selected_idx < len(self._keyboards):
+            return self._keyboards[self._selected_idx]
+        return None
+
+
+# ---------------------------------------------------------------------------
 # Import worker
 # ---------------------------------------------------------------------------
 
@@ -129,18 +242,23 @@ class ImportWorker(QObject):
 
 class SamplerController(QObject):
 
-    projectChanged       = pyqtSignal()
-    bpmChanged           = pyqtSignal()
-    statusChanged        = pyqtSignal()
-    importProgress       = pyqtSignal(float, str)
-    importDone           = pyqtSignal()
-    importError          = pyqtSignal(str)
-    settingsChanged      = pyqtSignal()
-    needsQualityMode     = pyqtSignal()
-    sampleEditorOpen     = pyqtSignal(int, str, float, float, float)
-    currentSampleChanged = pyqtSignal()
-    editorParamsChanged  = pyqtSignal()
-    zoomChanged          = pyqtSignal()
+    projectChanged              = pyqtSignal()
+    bpmChanged                  = pyqtSignal()
+    statusChanged               = pyqtSignal()
+    importProgress              = pyqtSignal(float, str)
+    importDone                  = pyqtSignal()
+    importError                 = pyqtSignal(str)
+    settingsChanged             = pyqtSignal()
+    needsQualityMode            = pyqtSignal()
+    sampleEditorOpen            = pyqtSignal(int, str, float, float, float)
+    currentSampleChanged        = pyqtSignal()
+    editorParamsChanged         = pyqtSignal()
+    zoomChanged                 = pyqtSignal()
+    # New signals
+    midiKeyboardsDetected       = pyqtSignal()
+    midiKeyboardSelected        = pyqtSignal()
+    bpmDetected                 = pyqtSignal()
+    sampleAnnotationsAnalyzed   = pyqtSignal()
 
     def __init__(self, cache_dir: Path, use_demucs: bool = True):
         super().__init__()
@@ -162,13 +280,24 @@ class SamplerController(QObject):
         self._current_pad_index: int = -1
         self._current_peaks: list[float] = []
         self._stem_peak_cache: dict[str, list[float]] = {}
-        # Snapshot of original parameters per sample.id for reset
         self._sample_originals: dict[str, dict] = {}
-        # Waveform zoom window (fractions 0..1)
         self._zoom_start: float = 0.0
         self._zoom_end:   float = 1.0
-        # Snap markers to detected beats
         self._snap_to_beats: bool = False
+
+        # NEW: MIDI, BPM, sample analysis models ────────────────────────
+        self._midi_keyboard_model = MidiKeyboardModel()
+        self._midi_keyboards: list[dict] = []
+        self._selected_midi_keyboard: Optional[dict] = None
+
+        self._detected_bpm: float = 0.0
+        self._detected_time_signature: str = "4/4"
+        self._bpm_confidence: float = 0.0
+        self._detected_key: str = ""
+        self._detected_key_lang: str = "en"
+
+        self._annotation_model = AnnotationModel()
+        self._annotations: list[dict] = []
 
         self._rebuild_engine()
 
@@ -211,6 +340,12 @@ class SamplerController(QObject):
     @pyqtProperty(QObject, constant=True)
     def padModel(self): return self._pad_model
 
+    @pyqtProperty(QObject, constant=True)
+    def midiKeyboardModel(self): return self._midi_keyboard_model
+
+    @pyqtProperty(QObject, constant=True)
+    def annotationModel(self): return self._annotation_model
+
     @pyqtProperty(str, notify=statusChanged)
     def status(self): return self._status
 
@@ -225,6 +360,28 @@ class SamplerController(QObject):
         if self._project and self._project.sources:
             return Path(str(self._project.sources[0].path)).stem
         return ""
+
+    # --- NEW: MIDI, BPM, Sample Analysis Properties ---
+
+    @pyqtProperty(float, notify=bpmDetected)
+    def detectedBpm(self): return self._detected_bpm
+
+    @pyqtProperty(str, notify=bpmDetected)
+    def detectedTimeSignature(self): return self._detected_time_signature
+
+    @pyqtProperty(float, notify=bpmDetected)
+    def bpmConfidence(self): return self._bpm_confidence
+
+    @pyqtProperty(str, notify=bpmDetected)
+    def detectedKeyEnglish(self): return self._detected_key
+
+    @pyqtProperty(str, notify=bpmDetected)
+    def detectedKeyItalian(self):
+        """Return Italian translation of detected key (if available)."""
+        from app.audio.analysis.key_detector_bilingual import translate_key
+        if not self._detected_key:
+            return ""
+        return translate_key(self._detected_key, "it")
 
     # --- Current sample editor properties ---
     @pyqtProperty(int, notify=currentSampleChanged)
@@ -262,7 +419,7 @@ class SamplerController(QObject):
         if not stem: return 0.0
         return stem.duration_samples / max(1, stem.sample_rate)
 
-    # --- Editor: per-sample params (mirror the Sample dataclass) ---
+    # --- Editor: per-sample params ---
     @pyqtProperty(float, notify=editorParamsChanged)
     def currentSampleGainDb(self):
         s = self._current_sample()
@@ -297,7 +454,7 @@ class SamplerController(QObject):
         sr = getattr(self.engine, "sample_rate", 44100)
         return getattr(s, "fade_out_samples", 0) / sr * 1000.0
 
-    # --- Beats for snap (positions as fractions 0..1 of stem duration) ---
+    # --- Beats for snap ---
     @pyqtProperty(list, notify=currentSampleChanged)
     def currentSampleBeats(self):
         s = self._current_sample()
@@ -435,6 +592,127 @@ class SamplerController(QObject):
         self.settingsChanged.emit()
         self.needsQualityMode.emit()
 
+    # ---- NEW: QML slots — MIDI detection ---
+
+    @pyqtSlot()
+    def detectMidiKeyboards(self):
+        """Auto-detect connected MIDI keyboards."""
+        try:
+            from app.hardware.midi.detector import detect_keyboards
+            keyboards = detect_keyboards(probe_seconds=0.5)
+            self._midi_keyboards = [
+                {
+                    "port_name": kb.port_name,
+                    "display_name": kb.display_name,
+                    "key_count": kb.key_count,
+                }
+                for kb in keyboards
+            ]
+            self._midi_keyboard_model.set_keyboards(self._midi_keyboards)
+            if self._midi_keyboards:
+                self._selected_midi_keyboard = self._midi_keyboards[0]
+                self._set_status(f"Detected {len(self._midi_keyboards)} MIDI keyboard(s)")
+            else:
+                self._set_status("No MIDI keyboards detected")
+            self.midiKeyboardsDetected.emit()
+        except Exception as e:
+            log.warning("MIDI detection failed: %s", e)
+            self._set_status(f"MIDI detection error: {e}")
+
+    @pyqtSlot(int)
+    def selectMidiKeyboard(self, index: int):
+        """Select a MIDI keyboard by model index."""
+        self._midi_keyboard_model.select_keyboard(index)
+        self._selected_midi_keyboard = self._midi_keyboard_model.selected_keyboard()
+        if self._selected_midi_keyboard:
+            self._set_status(f"Selected: {self._selected_midi_keyboard['display_name']}")
+        self.midiKeyboardSelected.emit()
+
+    # ---- NEW: QML slots — BPM detection ---
+
+    @pyqtSlot()
+    def detectBpmOfCurrentSource(self):
+        """Detect BPM of the currently loaded audio source."""
+        if not self._project or not self._project.sources:
+            self._set_status("No audio source loaded")
+            return
+
+        try:
+            from app.audio.analysis.bpm_detector import detect_bpm
+            source = self._project.sources[0]
+            if not source.path:
+                self._set_status("Source has no path")
+                return
+
+            result = detect_bpm(source.path)
+            self._detected_bpm = result.bpm
+            self._detected_time_signature = f"{result.time_signature[0]}/{result.time_signature[1]}"
+            self._bpm_confidence = result.confidence
+
+            # Also detect key
+            try:
+                from app.audio.analysis.key_detector_bilingual import detect_key_bilingual
+                key_result = detect_key_bilingual(source.path)
+                self._detected_key = key_result.english if key_result else ""
+            except Exception:
+                self._detected_key = ""
+
+            self._set_status(
+                f"BPM: {self._detected_bpm:.2f}  "
+                f"Time Sig: {self._detected_time_signature}  "
+                f"Confidence: {self._bpm_confidence:.2f}  "
+                f"Key: {self._detected_key}"
+            )
+            self.bpmDetected.emit()
+        except Exception as e:
+            log.warning("BPM detection failed: %s", e)
+            self._set_status(f"BPM detection error: {e}")
+
+    # ---- NEW: QML slots — Sample analysis ---
+
+    @pyqtSlot()
+    def analyzeSampleForAnnotations(self):
+        """Analyze currently selected sample and detect phrases/hits/breaks."""
+        if not self._project:
+            self._set_status("No project loaded")
+            return
+
+        s = self._current_sample()
+        if not s or not s.source_stem_id:
+            self._set_status("No sample selected")
+            return
+
+        stem = self._project.stem_by_id(s.source_stem_id)
+        if not stem or not stem.path or not stem.path.exists():
+            self._set_status("Sample stem file not found")
+            return
+
+        try:
+            from app.audio.analysis.sample_analyzer import analyze_sample
+            annotations = analyze_sample(stem.path)
+
+            # Convert to QML-friendly dicts (fractions 0..1)
+            total_samples = float(stem.duration_samples)
+            qml_annotations = []
+            for ann in annotations:
+                start_frac = ann.start_sample / total_samples
+                end_frac = ann.end_sample / total_samples
+                qml_annotations.append({
+                    "start_frac": max(0.0, min(1.0, start_frac)),
+                    "end_frac": max(0.0, min(1.0, end_frac)),
+                    "kind": ann.kind.value,
+                    "color": ann.color,
+                    "label": ann.label,
+                })
+
+            self._annotations = qml_annotations
+            self._annotation_model.set_annotations(qml_annotations)
+            self._set_status(f"Analyzed: {len(annotations)} regions detected")
+            self.sampleAnnotationsAnalyzed.emit()
+        except Exception as e:
+            log.warning("Sample analysis failed: %s", e)
+            self._set_status(f"Analysis error: {e}")
+
     # ---- QML slots — pad interaction ----------------------------------
 
     @pyqtSlot(str)
@@ -535,7 +813,7 @@ class SamplerController(QObject):
         self.engine.release_pad(pad)
         self._pad_model.notify_mode_changed(pad_index)
 
-    # ---- QML slots — sample editor (legacy 3-param flow kept) ---------
+    # ---- QML slots — sample editor -----------
 
     @pyqtSlot(int)
     def openSampleEditor(self, pad_index: int):
@@ -574,11 +852,9 @@ class SamplerController(QObject):
             f"fade in {fade_in_ms:.0f}ms  fade out {fade_out_ms:.0f}ms"
         )
 
-    # ---- New: granular per-param slots for live UI control ------------
+    # ---- Granular per-param slots ---
 
     def _apply_to_current(self, mutator) -> Optional[Sample]:
-        """Apply `mutator(sample)` to the currently selected sample and
-        re-register it on the engine. Returns the sample or None."""
         s = self._current_sample()
         if not s: return None
         self._ensure_originals(s)
@@ -622,8 +898,6 @@ class SamplerController(QObject):
 
     @pyqtSlot()
     def resetCurrentSample(self):
-        """Restore the original parameters captured when this pad was first
-        selected (start/end region included)."""
         s = self._current_sample()
         if not s: return
         orig = self._sample_originals.get(s.id)
@@ -640,7 +914,6 @@ class SamplerController(QObject):
 
     @pyqtSlot()
     def previewCurrentSample(self):
-        """Trigger the current sample without changing pad selection state."""
         if self._current_pad_index < 0 or not self._project: return
         bank = self._project.active_bank()
         if not bank: return
@@ -661,7 +934,7 @@ class SamplerController(QObject):
     def setWaveformZoom(self, start_frac: float, end_frac: float):
         a = max(0.0, min(1.0, float(start_frac)))
         b = max(0.0, min(1.0, float(end_frac)))
-        if b - a < 0.02:  # minimum 2% zoom window
+        if b - a < 0.02:
             return
         self._zoom_start, self._zoom_end = a, b
         self.zoomChanged.emit()
@@ -779,7 +1052,6 @@ class SamplerController(QObject):
         for s in self._project.samples:
             self.engine.register_sample(s)
         self._pad_model.set_pads(bank.pads)
-        # New samples → reset editor state and originals cache
         self._sample_originals.clear()
         self._current_pad_index = -1
         self._current_peaks = []
@@ -795,7 +1067,7 @@ class SamplerController(QObject):
         self._settings.save(SETTINGS_PATH)
         self.settingsChanged.emit()
 
-    # ---- Import internals ---------------------------------------------
+    # ---- Import internals -----
 
     def _start_import(self, path: Path):
         if self._import_thread and self._import_thread.isRunning():
@@ -874,7 +1146,6 @@ class SamplerController(QObject):
         if pad_index == self._current_pad_index:
             return
         self._current_pad_index = pad_index
-        # Reset zoom on pad change for clarity
         self._zoom_start, self._zoom_end = 0.0, 1.0
         self.zoomChanged.emit()
         self._refresh_current_peaks()
