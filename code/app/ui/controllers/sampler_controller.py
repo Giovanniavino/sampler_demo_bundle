@@ -295,6 +295,11 @@ class SamplerController(QObject):
         self._zoom_start: float = 0.0
         self._zoom_end:   float = 1.0
         self._snap_to_beats: bool = False
+        # View window: the slice of the STEM shown in the editor waveform.
+        # This is the sample region plus a context margin on each side.
+        self._view_start_sample: int = 0
+        self._view_end_sample: int = 1
+        self._view_context_fraction: float = 0.15  # 15% margin each side
 
         # NEW: MIDI, BPM, sample analysis models ────────────────────────
         self._midi_keyboard_model = MidiKeyboardModel()
@@ -473,27 +478,42 @@ class SamplerController(QObject):
 
     @pyqtProperty(float, notify=currentSampleChanged)
     def currentSampleStartFrac(self):
+        """Start position of the sample, as a fraction of the VIEW WINDOW."""
         s = self._current_sample()
         if not s: return 0.0
-        stem = self._project.stem_by_id(s.source_stem_id) if self._project else None
-        if not stem or stem.duration_samples <= 0: return 0.0
-        return max(0.0, min(1.0, s.start_sample / stem.duration_samples))
+        vlen = self._view_end_sample - self._view_start_sample
+        if vlen <= 0: return 0.0
+        return max(0.0, min(1.0,
+            (s.start_sample - self._view_start_sample) / vlen))
 
     @pyqtProperty(float, notify=currentSampleChanged)
     def currentSampleEndFrac(self):
+        """End position of the sample, as a fraction of the VIEW WINDOW."""
         s = self._current_sample()
         if not s: return 1.0
-        stem = self._project.stem_by_id(s.source_stem_id) if self._project else None
-        if not stem or stem.duration_samples <= 0: return 1.0
-        return max(0.0, min(1.0, s.end_sample / stem.duration_samples))
+        vlen = self._view_end_sample - self._view_start_sample
+        if vlen <= 0: return 1.0
+        return max(0.0, min(1.0,
+            (s.end_sample - self._view_start_sample) / vlen))
 
     @pyqtProperty(float, notify=currentSampleChanged)
     def currentStemDurationSec(self):
+        """Duration of the VIEW WINDOW in seconds (what the waveform shows)."""
         s = self._current_sample()
         if not s: return 0.0
         stem = self._project.stem_by_id(s.source_stem_id) if self._project else None
         if not stem: return 0.0
-        return stem.duration_samples / max(1, stem.sample_rate)
+        vlen = self._view_end_sample - self._view_start_sample
+        return vlen / max(1, stem.sample_rate)
+
+    @pyqtProperty(float, notify=currentSampleChanged)
+    def currentSampleDurationSec(self):
+        """Duration of the SAMPLE itself (start..end) in seconds."""
+        s = self._current_sample()
+        if not s: return 0.0
+        stem = self._project.stem_by_id(s.source_stem_id) if self._project else None
+        if not stem: return 0.0
+        return (s.end_sample - s.start_sample) / max(1, stem.sample_rate)
 
     # --- Editor: per-sample params ---
     @pyqtProperty(float, notify=editorParamsChanged)
@@ -712,6 +732,7 @@ class SamplerController(QObject):
     # --- Beats for snap ---
     @pyqtProperty(list, notify=currentSampleChanged)
     def currentSampleBeats(self):
+        """Beat positions as fractions of the VIEW WINDOW (for grid overlay)."""
         s = self._current_sample()
         if not s or not self._project: return []
         stem = self._project.stem_by_id(s.source_stem_id)
@@ -723,7 +744,9 @@ class SamplerController(QObject):
         )
         if not analysis: return []
         beats = getattr(analysis, "beats", None) or []
-        total = float(stem.duration_samples)
+        vstart = self._view_start_sample
+        vlen = self._view_end_sample - self._view_start_sample
+        if vlen <= 0: return []
         out = []
         for b in beats:
             pos = (
@@ -732,7 +755,7 @@ class SamplerController(QObject):
                 or getattr(b, "sample", None)
                 or 0
             )
-            f = pos / total
+            f = (pos - vstart) / vlen
             if 0.0 <= f <= 1.0:
                 out.append(float(f))
         return out
@@ -1834,11 +1857,10 @@ class SamplerController(QObject):
             return
 
         stem_id = s.source_stem_id
-        # Check cache first
+        # Check cache first — cached annotations are in absolute samples,
+        # so remap them to the current view window.
         if stem_id in self._stem_annotation_cache:
-            self._annotation_model.set_annotations(
-                self._stem_annotation_cache[stem_id]
-            )
+            self._remap_annotations_to_view(stem_id)
             return
 
         # Not cached — analyze now (background-safe but fast for stems)
@@ -1850,38 +1872,112 @@ class SamplerController(QObject):
         try:
             from app.audio.analysis.sample_analyzer import analyze_sample
             annotations = analyze_sample(stem.path)
-            total = float(stem.duration_samples)
-            qml_ann = []
+            # Cache in ABSOLUTE samples so we can remap to any view window
+            abs_ann = []
             for ann in annotations:
-                qml_ann.append({
-                    "start_frac": max(0.0, min(1.0, ann.start_sample / total)),
-                    "end_frac": max(0.0, min(1.0, ann.end_sample / total)),
+                abs_ann.append({
+                    "start_sample": ann.start_sample,
+                    "end_sample": ann.end_sample,
                     "kind": ann.kind.value,
                     "color": ann.color,
                     "label": ann.label,
                 })
-            self._stem_annotation_cache[stem_id] = qml_ann
-            self._annotation_model.set_annotations(qml_ann)
+            self._stem_annotation_cache[stem_id] = abs_ann
+            self._remap_annotations_to_view(stem_id)
         except Exception as e:
             log.warning("Auto-analysis failed: %s", e)
             self._annotation_model.set_annotations([])
 
+    def _remap_annotations_to_view(self, stem_id: str):
+        """
+        Convert cached absolute-sample annotations into VIEW-WINDOW fractions
+        and push to the model. Only annotations overlapping the view are kept.
+        """
+        abs_ann = self._stem_annotation_cache.get(stem_id)
+        if not abs_ann:
+            self._annotation_model.set_annotations([])
+            return
+        vstart = self._view_start_sample
+        vlen = self._view_end_sample - self._view_start_sample
+        if vlen <= 0:
+            self._annotation_model.set_annotations([])
+            return
+        qml_ann = []
+        for a in abs_ann:
+            # Skip annotations entirely outside the view window
+            if a["end_sample"] < vstart or a["start_sample"] > self._view_end_sample:
+                continue
+            sf = (a["start_sample"] - vstart) / vlen
+            ef = (a["end_sample"] - vstart) / vlen
+            qml_ann.append({
+                "start_frac": max(0.0, min(1.0, sf)),
+                "end_frac": max(0.0, min(1.0, ef)),
+                "kind": a["kind"],
+                "color": a["color"],
+                "label": a["label"],
+            })
+        self._annotation_model.set_annotations(qml_ann)
+
+    def _recompute_view_window(self):
+        """
+        Set the view window = sample region + context margin on each side,
+        clamped to the stem bounds. This is the slice of audio the editor
+        waveform displays (DAW-style: you see the chop, not the whole song).
+        """
+        s = self._current_sample()
+        if not s or not s.source_stem_id or not self._project:
+            self._view_start_sample = 0
+            self._view_end_sample = 1
+            return
+        stem = self._project.stem_by_id(s.source_stem_id)
+        if not stem or stem.duration_samples <= 0:
+            self._view_start_sample = 0
+            self._view_end_sample = 1
+            return
+
+        sample_len = max(1, s.end_sample - s.start_sample)
+        margin = int(sample_len * self._view_context_fraction)
+        vstart = max(0, s.start_sample - margin)
+        vend = min(stem.duration_samples, s.end_sample + margin)
+        if vend <= vstart:
+            vend = min(stem.duration_samples, vstart + sample_len)
+        self._view_start_sample = vstart
+        self._view_end_sample = max(vstart + 1, vend)
+
     def _refresh_current_peaks(self):
+        """
+        Compute waveform peaks for the CURRENT VIEW WINDOW (sample + margin),
+        not the whole stem. Cached per (stem_id, view_start, view_end) so
+        re-selecting the same pad is instant but moving markers refreshes.
+        """
         s = self._current_sample()
         if not s or not s.source_stem_id:
             self._current_peaks = []
-            return
-        cached = self._stem_peak_cache.get(s.source_stem_id)
-        if cached is not None:
-            self._current_peaks = cached
             return
         stem = self._project.stem_by_id(s.source_stem_id)
         if not stem or not stem.path or not stem.path.exists():
             self._current_peaks = []
             return
-        from app.audio.dsp.waveform_peaks import compute_peaks
-        peaks = compute_peaks(stem.path, num_bins=400)
-        self._stem_peak_cache[s.source_stem_id] = peaks
+
+        # Recompute the view window first
+        self._recompute_view_window()
+
+        cache_key = (
+            f"{s.source_stem_id}:{self._view_start_sample}:{self._view_end_sample}"
+        )
+        cached = self._stem_peak_cache.get(cache_key)
+        if cached is not None:
+            self._current_peaks = cached
+            return
+
+        from app.audio.dsp.waveform_peaks import compute_region_peaks
+        peaks = compute_region_peaks(
+            stem.path,
+            self._view_start_sample,
+            self._view_end_sample,
+            num_bins=600,
+        )
+        self._stem_peak_cache[cache_key] = peaks
         self._current_peaks = peaks
 
     @pyqtSlot(int)
@@ -1896,8 +1992,9 @@ class SamplerController(QObject):
     def setCurrentSampleRegion(self, start_frac: float, end_frac: float):
         """
         Update the sample region (start/end) WITHOUT re-rendering audio.
-        Use during interactive drag — call commitCurrentSampleRegion() on
-        release to actually re-render the audio buffer.
+        The fractions are relative to the VIEW WINDOW (what the waveform
+        shows), not the whole stem. Use during interactive drag — call
+        commitCurrentSampleRegion() on release to re-render + refresh peaks.
         """
         s = self._current_sample()
         if not s or not s.source_stem_id: return
@@ -1907,19 +2004,28 @@ class SamplerController(QObject):
         b = max(0.0, min(1.0, max(start_frac, end_frac)))
         min_samples = max(1, stem.sample_rate // 20)
         self._ensure_originals(s)
-        s.start_sample = int(a * stem.duration_samples)
+
+        # Map view-window fractions → absolute stem samples
+        vstart = self._view_start_sample
+        vlen = self._view_end_sample - self._view_start_sample
+        s.start_sample = int(vstart + a * vlen)
         s.end_sample = max(
             s.start_sample + min_samples,
-            int(b * stem.duration_samples),
+            int(vstart + b * vlen),
         )
+        # Clamp to stem bounds
+        s.start_sample = max(0, min(s.start_sample, stem.duration_samples - 1))
+        s.end_sample = max(s.start_sample + min_samples,
+                           min(s.end_sample, stem.duration_samples))
         # Emit so QML bindings refresh (marker positions, duration display)
         self.currentSampleChanged.emit()
 
     @pyqtSlot()
     def commitCurrentSampleRegion(self):
         """
-        Re-render the audio buffer for the current sample.
-        Call this after a drag is complete, not on every pixel move.
+        Re-render the audio buffer for the current sample AND recompute the
+        view-window waveform peaks so the displayed shape matches the new
+        region (DAW-style: drag end, waveform + duration update on release).
         """
         s = self._current_sample()
         if not s: return
@@ -1927,9 +2033,12 @@ class SamplerController(QObject):
             self.engine.register_sample(s)
         except Exception as e:
             log.warning("commitCurrentSampleRegion: register failed: %s", e)
-        # Refresh peaks too — region changed so the visible waveform may differ
-        # (we use stem-level peaks so they don't actually change, but keep this
-        # for future safety)
+        # Recompute view window + peaks for the new region
+        self._refresh_current_peaks()
+        # Remap annotations to the new view window too
+        s2 = self._current_sample()
+        if s2 and s2.source_stem_id in self._stem_annotation_cache:
+            self._remap_annotations_to_view(s2.source_stem_id)
         self.editorParamsChanged.emit()
         self.currentSampleChanged.emit()
 

@@ -432,12 +432,7 @@ ApplicationWindow {
             }
             Text {
                 visible: controller.currentSampleName !== ""
-                text: {
-                    var dur = controller.currentStemDurationSec
-                    var s = controller.currentSampleStartFrac * dur
-                    var e = controller.currentSampleEndFrac * dur
-                    return (e - s).toFixed(2) + "s"
-                }
+                text: controller.currentSampleDurationSec.toFixed(2) + "s"
                 color: cMuted; font.pixelSize: 11
                 anchors.verticalCenter: parent.verticalCenter
             }

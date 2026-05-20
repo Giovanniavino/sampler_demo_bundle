@@ -55,3 +55,26 @@ def compute_peaks_from_array(audio: np.ndarray, num_bins: int = 400) -> list[flo
         peaks.append(float(seg.min()))
         peaks.append(float(seg.max()))
     return peaks
+
+
+def compute_region_peaks(audio_path: Path,
+                          start_sample: int, end_sample: int,
+                          num_bins: int = 600) -> list[float]:
+    """
+    Compute peaks for a SPECIFIC region [start_sample, end_sample] of a file.
+
+    This is what the sample editor uses: the waveform shows exactly the slice
+    being edited (plus context the caller bakes into start/end), so markers and
+    the displayed shape line up with the audio — like a real DAW.
+    """
+    try:
+        data, _ = sf.read(str(audio_path), dtype='float32', always_2d=True)
+        mono = data.mean(axis=1) if data.ndim == 2 else data
+        n = len(mono)
+        s = max(0, min(int(start_sample), n))
+        e = max(s + 1, min(int(end_sample), n))
+        region = mono[s:e]
+        return compute_peaks_from_array(region, num_bins)
+    except Exception as e:
+        log.warning("Region peaks failed for %s: %s", audio_path, e)
+        return [0.0] * (num_bins * 2)
