@@ -23,6 +23,8 @@ from app.audio.playback.engine import SounddevicePlaybackEngine
 from app.audio.separation.heuristic import HeuristicSeparator
 from app.audio.separation.separator import DemucsSeparator, DummySeparator
 from app.audio.slicing.pad_assigner import CATEGORY_COLORS
+from app.audio.metronome import Metronome
+from app.audio.recording import Recorder, Player, RecordedSequence
 from app.core.models import Pad, PadMode, Project, Sample
 from app.core.settings import (
     DRUM_PRESETS, LOOP_PRESETS, VOCAL_PRESETS, AppSettings,
@@ -259,6 +261,15 @@ class SamplerController(QObject):
     midiKeyboardSelected        = pyqtSignal()
     bpmDetected                 = pyqtSignal()
     sampleAnnotationsAnalyzed   = pyqtSignal()
+    outputDevicesRefreshed      = pyqtSignal()
+    outputDeviceChanged         = pyqtSignal()
+    playbackPositionChanged     = pyqtSignal()
+    # NEW: Transport / Metronome / Recording
+    metronomeStateChanged       = pyqtSignal()
+    beatTick                    = pyqtSignal(int, bool)  # beat_index, is_downbeat
+    recordStateChanged          = pyqtSignal()
+    playerStateChanged          = pyqtSignal()
+    sequenceUpdated             = pyqtSignal()
 
     def __init__(self, cache_dir: Path, use_demucs: bool = True):
         super().__init__()
@@ -299,20 +310,85 @@ class SamplerController(QObject):
         self._annotation_model = AnnotationModel()
         self._annotations: list[dict] = []
 
+        # NEW: output device list & selection
+        self._output_devices: list[dict] = []
+        self._selected_output_device: Optional[str] = None  # None = system default
+
+        # NEW: per-stem annotation cache (auto-analyzed on pad select)
+        self._stem_annotation_cache: dict[str, list[dict]] = {}
+
+        # NEW: playback position tracking (for waveform playhead)
+        self._playback_position_frac: float = 0.0
+        self._position_timer: Optional[object] = None  # QTimer set up below
+
+        # NEW: Metronome + Recorder + Player
+        self._metronome = Metronome(self)
+        self._recorder = Recorder(self)
+        self._player = Player(
+            trigger_cb=self._playback_trigger,
+            release_cb=self._playback_release,
+            parent=self,
+        )
+        # Wire signals
+        self._metronome.beat.connect(self._on_metronome_beat)
+        self._metronome.count_in_finished.connect(self._on_count_in_done)
+        self._recorder.stateChanged.connect(self._on_record_state_changed)
+        self._recorder.eventLogged.connect(self._on_event_logged)
+        self._player.playbackStateChanged.connect(self._on_player_state)
+
+        self._current_beat: int = 0
+        self._is_downbeat: bool = False
+        self._quantize_percent: float = 0.0  # 0 = no quantize
+
         self._rebuild_engine()
+
+        # Inject engine into metronome so it can play clicks
+        self._metronome.set_engine(self.engine)
+
+        # Start position tracking timer (60 FPS)
+        from PyQt6.QtCore import QTimer
+        self._position_timer = QTimer(self)
+        self._position_timer.setInterval(33)  # ~30 Hz
+        self._position_timer.timeout.connect(self._update_playback_position)
+        self._position_timer.start()
 
     # ---- Helpers -------------------------------------------------------
 
     def _rebuild_engine(self):
         pb = self._settings.playback
-        if hasattr(self, 'engine') and self.engine:
-            try: self.engine.stop()
+        old_engine = getattr(self, "engine", None)
+        if old_engine:
+            try: old_engine.stop()
             except Exception: pass
         self.engine = SounddevicePlaybackEngine(
             sample_rate=pb.sample_rate,
             block_size=pb.block_size,
+            output_device=self._selected_output_device,
         )
-        self.engine.start()
+        try:
+            self.engine.start()
+        except Exception as e:
+            log.error("Engine start failed: %s", e)
+            # The engine may have reset output_device to None during its
+            # internal fallback. Sync our state so the UI reflects reality.
+            self._selected_output_device = getattr(
+                self.engine, "output_device", None
+            )
+            self._set_status(f"Audio device error — using default. ({e})")
+            # Try one clean rebuild on the default device
+            try:
+                self.engine = SounddevicePlaybackEngine(
+                    sample_rate=pb.sample_rate,
+                    block_size=pb.block_size,
+                    output_device=None,
+                )
+                self.engine.start()
+                self._selected_output_device = None
+            except Exception as e2:
+                log.error("Default device also failed: %s", e2)
+                self._set_status(
+                    "No working audio device found. Check your settings."
+                )
 
     def _build_pipeline(self) -> SamplerPipeline:
         from app.audio.slicing.auto_slicer import AutoSlicer
@@ -453,6 +529,185 @@ class SamplerController(QObject):
         if not s: return 0.0
         sr = getattr(self.engine, "sample_rate", 44100)
         return getattr(s, "fade_out_samples", 0) / sr * 1000.0
+
+    # --- NEW: cutoff, pan, global pitch ---
+    @pyqtProperty(float, notify=editorParamsChanged)
+    def currentSampleCutoffHz(self):
+        s = self._current_sample()
+        return float(getattr(s, "cutoff_hz", 20000.0)) if s else 20000.0
+
+    @pyqtProperty(float, notify=editorParamsChanged)
+    def currentSamplePan(self):
+        s = self._current_sample()
+        return float(getattr(s, "pan", 0.0)) if s else 0.0
+
+    @pyqtProperty(float, notify=settingsChanged)
+    def globalPitchSemitones(self):
+        return getattr(self.engine, "global_pitch_semitones", 0.0)
+
+    # --- NEW: loop sync to BPM grid ---
+    @pyqtProperty(int, notify=editorParamsChanged)
+    def currentSampleLoopBeats(self):
+        s = self._current_sample()
+        return int(getattr(s, "loop_beats", 0)) if s else 0
+
+    @pyqtProperty(float, notify=editorParamsChanged)
+    def currentSampleEffectiveBpm(self):
+        """BPM that would be used for loop sync (sample's bpm or project bpm)."""
+        s = self._current_sample()
+        if s and getattr(s, "bpm", None):
+            return float(s.bpm)
+        return float(getattr(self.engine, "project_bpm", 0.0))
+
+    @pyqtProperty(int, notify=editorParamsChanged)
+    def currentSampleSuggestedBeats(self):
+        """Auto-detected beat count for the current sample length."""
+        s = self._current_sample()
+        if not s or not self._project:
+            return 0
+        # Use the stem for accurate length
+        if s.source_stem_id:
+            stem = self._project.stem_by_id(s.source_stem_id)
+            if stem:
+                length = max(0, s.end_sample - s.start_sample)
+                bpm = self.currentSampleEffectiveBpm
+                if bpm > 0 and length > 0:
+                    return SounddevicePlaybackEngine.suggest_loop_beats(
+                        length, stem.sample_rate, bpm
+                    )
+        return 0
+
+    # --- NEW: Output device properties ---
+    @pyqtProperty(list, notify=outputDevicesRefreshed)
+    def outputDevices(self):
+        """List of available audio output devices (dicts)."""
+        return self._output_devices
+
+    @pyqtProperty(str, notify=outputDeviceChanged)
+    def currentOutputDevice(self):
+        """Name of the currently selected output device, or 'Default'."""
+        if self._selected_output_device:
+            return self._selected_output_device
+        try:
+            return SounddevicePlaybackEngine.get_default_output_device_name()
+        except Exception:
+            return "Default"
+
+    # --- NEW: Stems output folder property ---
+    @pyqtProperty(str, notify=settingsChanged)
+    def stemsOutputDir(self):
+        """User-chosen folder where stems get saved. Empty = default cache."""
+        return getattr(self._settings, "stems_output_dir", "") or ""
+
+    @pyqtProperty(str, notify=settingsChanged)
+    def stemsOutputDirDisplay(self):
+        """Human-friendly display: real path or '(default cache folder)'."""
+        d = getattr(self._settings, "stems_output_dir", "") or ""
+        if not d:
+            return "(default cache folder)"
+        return d
+
+    # --- NEW: Metronome properties ---
+    @pyqtProperty(bool, notify=metronomeStateChanged)
+    def metronomeEnabled(self):
+        return self._metronome.enabled
+
+    @pyqtProperty(int, notify=metronomeStateChanged)
+    def metronomeCountInBars(self):
+        return self._metronome.count_in_bars
+
+    @pyqtProperty(int, notify=beatTick)
+    def currentBeat(self):
+        return self._current_beat
+
+    @pyqtProperty(bool, notify=beatTick)
+    def isDownbeat(self):
+        return self._is_downbeat
+
+    @pyqtProperty(bool, notify=metronomeStateChanged)
+    def isCountIn(self):
+        return self._metronome.is_count_in
+
+    # --- NEW: Recording properties ---
+    @pyqtProperty(bool, notify=recordStateChanged)
+    def isRecording(self):
+        return self._recorder.is_recording
+
+    @pyqtProperty(bool, notify=recordStateChanged)
+    def isRecordArmed(self):
+        """True if we're waiting for count-in to finish."""
+        return self._metronome.is_count_in and not self._recorder.is_recording
+
+    @pyqtProperty(int, notify=sequenceUpdated)
+    def recordedEventCount(self):
+        return self._recorder.event_count
+
+    @pyqtProperty(float, notify=settingsChanged)
+    def quantizePercent(self):
+        return self._quantize_percent
+
+    # --- NEW: Player properties ---
+    @pyqtProperty(bool, notify=playerStateChanged)
+    def isPlayingSequence(self):
+        return self._player.is_playing
+
+    @pyqtProperty(bool, notify=playerStateChanged)
+    def isPausedSequence(self):
+        return self._player.is_paused
+
+    @pyqtProperty(bool, notify=sequenceUpdated)
+    def hasRecordedSequence(self):
+        return self._recorder.event_count > 0 or self._player._sequence is not None
+
+    # --- NEW: Playback position (for waveform playhead) ---
+    @pyqtProperty(float, notify=playbackPositionChanged)
+    def playbackPositionFrac(self):
+        """
+        Fractional position (0..1) within the currently playing voice of
+        the current pad. Returns 0 if nothing is playing.
+        """
+        return self._playback_position_frac
+
+    @pyqtProperty(bool, notify=playbackPositionChanged)
+    def isPlaying(self):
+        """True if a voice exists for the current pad."""
+        if self._current_pad_index < 0:
+            return False
+        try:
+            for v in getattr(self.engine, "_voices", []):
+                if v.pad_index == self._current_pad_index and v.active:
+                    return True
+        except Exception:
+            pass
+        return False
+
+    def _update_playback_position(self):
+        """Called by QTimer to push playback position to UI."""
+        new_pos = 0.0
+        if self._current_pad_index >= 0:
+            try:
+                for v in getattr(self.engine, "_voices", []):
+                    if v.pad_index == self._current_pad_index and v.active:
+                        if len(v.audio) > 0:
+                            # Within sample boundaries [start, end]
+                            # The audio buffer is already cropped to [start, end]
+                            new_pos = v.position / len(v.audio)
+                        break
+            except Exception:
+                pass
+        # Map to [start_frac, end_frac] of stem
+        if new_pos > 0:
+            s = self._current_sample()
+            if s:
+                start_f = self.currentSampleStartFrac
+                end_f = self.currentSampleEndFrac
+                # The voice plays the rendered audio (start..end of stem)
+                # so new_pos (0..1 of voice audio) maps to (start..end) of stem
+                new_pos = start_f + (end_f - start_f) * new_pos
+
+        if abs(new_pos - self._playback_position_frac) > 0.001:
+            self._playback_position_frac = new_pos
+            self.playbackPositionChanged.emit()
 
     # --- Beats for snap ---
     @pyqtProperty(list, notify=currentSampleChanged)
@@ -663,6 +918,11 @@ class SamplerController(QObject):
                 f"Confidence: {self._bpm_confidence:.2f}  "
                 f"Key: {self._detected_key}"
             )
+            # NEW: propagate detected BPM to engine
+            try:
+                self.engine.set_project_bpm(self._detected_bpm)
+            except AttributeError:
+                pass
             self.bpmDetected.emit()
         except Exception as e:
             log.warning("BPM detection failed: %s", e)
@@ -740,6 +1000,9 @@ class SamplerController(QObject):
         self._trigger_wallclock[pad_index] = time.monotonic()
         self._trigger_sample_len[pad_index] = sample.length_samples
         self._set_current_pad(pad_index)
+        # NEW: log event for recording
+        if self._recorder.is_recording:
+            self._recorder.log_trigger(pad_index, velocity=100)
 
     @pyqtSlot(int)
     def releasePad(self, pad_index: int):
@@ -754,6 +1017,9 @@ class SamplerController(QObject):
         if pad.mode in (PadMode.HOLD, PadMode.GATE):
             self.engine.release_pad(pad)
         self._pad_model.set_active(pad_index, False)
+        # NEW: log event for recording
+        if self._recorder.is_recording:
+            self._recorder.log_release(pad_index)
 
     @pyqtSlot(int)
     def padHoldTick(self, pad_index: int):
@@ -788,6 +1054,28 @@ class SamplerController(QObject):
         for p in (self._project.active_bank().pads if self._project else []):
             self._pad_model.set_active(p.index, False)
         self._hold_looping.clear()
+
+    @pyqtSlot(int)
+    def stopPad(self, pad_index: int):
+        """
+        Stop a specific pad's playback (works for LOOP, HOLD, GATE, ONE_SHOT).
+        Routed through the engine command queue (thread-safe).
+        """
+        if not self._project:
+            return
+        bank = self._project.active_bank()
+        if not bank or not (0 <= pad_index < len(bank.pads)):
+            return
+        pad = bank.pads[pad_index]
+        try:
+            self.engine.release_pad(pad)
+            # Thread-safe stop via command queue
+            if hasattr(self.engine, "stop_pad"):
+                self.engine.stop_pad(pad_index)
+        except Exception as e:
+            log.warning("stopPad failed: %s", e)
+        self._pad_model.set_active(pad_index, False)
+        self._hold_looping[pad_index] = False
 
     @pyqtSlot(int)
     def cyclePadMode(self, pad_index: int):
@@ -895,6 +1183,378 @@ class SamplerController(QObject):
         sr = self.engine.sample_rate
         n  = max(0, int(float(ms) / 1000 * sr))
         self._apply_to_current(lambda s: setattr(s, "fade_out_samples", n))
+
+    # --- NEW: cutoff, pan, global pitch slots ---
+    @pyqtSlot(float)
+    def setCurrentSampleCutoff(self, hz: float):
+        clamped = max(20.0, min(20000.0, float(hz)))
+        self._apply_to_current(lambda s: setattr(s, "cutoff_hz", clamped))
+
+    @pyqtSlot(float)
+    def setCurrentSamplePan(self, pan: float):
+        clamped = max(-1.0, min(1.0, float(pan)))
+        self._apply_to_current(lambda s: setattr(s, "pan", clamped))
+
+    @pyqtSlot(float)
+    def setGlobalPitch(self, semitones: float):
+        """Apply global pitch shift to ALL samples in the project."""
+        clamped = max(-24.0, min(24.0, float(semitones)))
+        try:
+            self.engine.set_global_pitch(clamped)
+        except AttributeError:
+            log.warning("Engine does not support global pitch")
+            return
+        self.settingsChanged.emit()
+        self._set_status(f"Global pitch: {clamped:+.1f} semitones")
+
+    # --- NEW: Loop sync to BPM grid ---
+    @pyqtSlot(int)
+    def setCurrentSampleLoopBeats(self, beats: int):
+        """
+        Lock loop length to N beats at sample/project BPM.
+        Pass 0 to disable BPM sync (free-running loop).
+        """
+        n = max(0, min(64, int(beats)))
+        self._apply_to_current(lambda s: setattr(s, "loop_beats", n))
+        if n > 0:
+            self._set_status(
+                f"Loop locked to {n} beats @ "
+                f"{self.currentSampleEffectiveBpm:.1f} BPM"
+            )
+        else:
+            self._set_status("Loop BPM sync: OFF")
+
+    @pyqtSlot()
+    def autoSyncCurrentSampleLoop(self):
+        """Auto-detect the best beat count and lock the loop to it."""
+        s = self._current_sample()
+        if not s:
+            return
+        suggested = self.currentSampleSuggestedBeats
+        if suggested > 0:
+            self.setCurrentSampleLoopBeats(suggested)
+        else:
+            self._set_status("Cannot auto-sync: BPM unknown")
+
+    # --- NEW: Output device slots ---
+    @pyqtSlot()
+    def refreshOutputDevices(self):
+        """Scan available audio output devices."""
+        try:
+            self._output_devices = SounddevicePlaybackEngine.list_output_devices()
+            self._set_status(f"Found {len(self._output_devices)} output device(s)")
+            self.outputDevicesRefreshed.emit()
+        except Exception as e:
+            log.warning("Failed to refresh output devices: %s", e)
+            self._set_status(f"Device scan error: {e}")
+
+    @pyqtSlot(str)
+    def setOutputDevice(self, device_name: str):
+        """
+        Switch audio output to a specific device by name.
+        Pass empty string or 'Default' to use system default.
+        Rebuilds the audio engine and reloads stems/samples.
+        Falls back gracefully if the device can't be opened.
+        """
+        new_device = device_name if device_name and device_name != "Default" else None
+        if new_device == self._selected_output_device:
+            return
+
+        previous_device = self._selected_output_device
+        self._selected_output_device = new_device
+        self._rebuild_engine()
+
+        # _rebuild_engine may have reverted to default on failure.
+        # Re-wire the metronome to the (possibly new) engine instance.
+        try:
+            self._metronome.set_engine(self.engine)
+        except Exception:
+            pass
+
+        # Reload stems and samples into the new engine
+        if self._project:
+            try:
+                self.engine.load_stems(self._project.stems)
+                for s in self._project.samples:
+                    self.engine.register_sample(s)
+            except Exception as e:
+                log.warning("Reloading samples after device switch failed: %s", e)
+
+        actual = self._selected_output_device or "Default"
+        if new_device and self._selected_output_device != new_device:
+            # We asked for new_device but ended up elsewhere (fallback)
+            self._set_status(
+                f"Could not use '{new_device}', staying on {actual}"
+            )
+        else:
+            self._set_status(f"Output device: {actual}")
+        self.outputDeviceChanged.emit()
+
+    # --- NEW: Stems output folder slot ---
+    @pyqtSlot(str)
+    def setStemsOutputDir(self, folder_url: str):
+        """
+        Set the folder where stems will be saved for new track imports.
+        Accepts a file:// URL (from FolderDialog) or a plain path.
+        Pass empty string to reset to the default cache folder.
+        """
+        if folder_url:
+            path = self._qml_file_to_path(folder_url)
+            folder_str = str(path)
+        else:
+            folder_str = ""
+
+        # Persist into settings
+        if hasattr(self._settings, "stems_output_dir"):
+            self._settings.stems_output_dir = folder_str
+        else:
+            # Fallback if user hasn't applied the settings patch yet
+            try:
+                setattr(self._settings, "stems_output_dir", folder_str)
+            except Exception:
+                log.warning("Settings has no 'stems_output_dir' attribute. "
+                            "Apply PATCH_settings.md to enable persistence.")
+                self.settingsChanged.emit()
+                return
+
+        self._save_and_notify()
+        if folder_str:
+            self._set_status(f"Stems output folder: {folder_str}")
+        else:
+            self._set_status("Stems output folder reset to default cache")
+
+    # ===================================================================
+    # NEW: Transport / Metronome / Recording slots
+    # ===================================================================
+
+    @pyqtSlot()
+    def toggleMetronome(self):
+        """Turn metronome on/off."""
+        if self._metronome.enabled:
+            self._metronome.stop()
+            self._set_status("Metronome: OFF")
+        else:
+            # Use detected/loaded BPM
+            bpm = self._effective_bpm()
+            if bpm <= 0:
+                self._set_status("Cannot start metronome: BPM unknown")
+                return
+            self._metronome.set_bpm(bpm)
+            self._metronome.start()
+            self._set_status(f"Metronome: ON @ {bpm:.1f} BPM")
+        self.metronomeStateChanged.emit()
+
+    @pyqtSlot(int)
+    def setCountInBars(self, bars: int):
+        """Set how many bars of count-in to play before recording. 0=off."""
+        self._metronome.set_count_in_bars(int(bars))
+        self._set_status(f"Count-in: {bars} bars")
+        self.metronomeStateChanged.emit()
+
+    @pyqtSlot(float)
+    def setQuantizePercent(self, percent: float):
+        """0 = no quantize, 100 = fully snapped to beat."""
+        self._quantize_percent = max(0.0, min(100.0, float(percent)))
+        self._set_status(f"Quantize: {self._quantize_percent:.0f}%")
+        self.settingsChanged.emit()
+
+    @pyqtSlot()
+    def armRecord(self):
+        """
+        Start recording with optional count-in. If count-in bars > 0,
+        plays metronome for those bars first, then begins recording.
+        Otherwise starts recording immediately.
+        """
+        if self._recorder.is_recording:
+            self._set_status("Already recording")
+            return
+        bpm = self._effective_bpm()
+        if bpm <= 0:
+            self._set_status("Cannot record: BPM unknown")
+            return
+        self._metronome.set_bpm(bpm)
+
+        if self._metronome.count_in_bars > 0:
+            # Start count-in; _on_count_in_done() will start actual recording
+            if self._metronome.start_count_in():
+                self._set_status(
+                    f"Count-in: {self._metronome.count_in_bars} bars…"
+                )
+                self.recordStateChanged.emit()
+                self.metronomeStateChanged.emit()
+                return
+
+        # No count-in — start immediately
+        self._start_recording_now(bpm)
+
+    def _start_recording_now(self, bpm: float):
+        self._recorder.start(bpm=bpm)
+        self._set_status(f"● Recording @ {bpm:.1f} BPM")
+        self.recordStateChanged.emit()
+
+    @pyqtSlot()
+    def stopRecord(self):
+        """Stop recording and store the sequence."""
+        if not self._recorder.is_recording:
+            return
+        self._recorder.stop()
+        seq = self._recorder.sequence
+        if self._quantize_percent > 0:
+            seq = seq.quantized(self._quantize_percent)
+        self._player.load_sequence(seq)
+        self._set_status(
+            f"Recorded {len(seq.events)} events ({seq.duration_ms/1000:.1f}s)"
+        )
+        self.recordStateChanged.emit()
+        self.sequenceUpdated.emit()
+
+    @pyqtSlot()
+    def playSequence(self):
+        """Play back the recorded sequence."""
+        if self._recorder.event_count == 0 and not self._player._sequence:
+            self._set_status("No recording to play")
+            return
+        # If recorder has fresh data not yet loaded, load it now
+        if self._recorder.event_count > 0 and not self._player._sequence:
+            seq = self._recorder.sequence
+            if self._quantize_percent > 0:
+                seq = seq.quantized(self._quantize_percent)
+            self._player.load_sequence(seq)
+        self._player.play()
+
+    @pyqtSlot()
+    def pauseSequence(self):
+        self._player.pause()
+
+    @pyqtSlot()
+    def stopSequence(self):
+        self._player.stop()
+
+    @pyqtSlot()
+    def seekToStart(self):
+        self._player.seek_to_start()
+
+    @pyqtSlot()
+    def seekForward(self):
+        self._player.seek_forward_beats(1)
+
+    @pyqtSlot()
+    def seekBackward(self):
+        self._player.seek_backward_beats(1)
+
+    @pyqtSlot()
+    def clearSequence(self):
+        self._recorder.clear()
+        self._player.stop()
+        self._player._sequence = None
+        self._set_status("Sequence cleared")
+        self.sequenceUpdated.emit()
+        self.playerStateChanged.emit()
+
+    # ---- Internal callbacks for metronome/record/player ----
+
+    def _on_metronome_beat(self, beat_index: int, is_downbeat: bool):
+        self._current_beat = beat_index
+        self._is_downbeat = is_downbeat
+        self.beatTick.emit(beat_index, is_downbeat)
+
+    def _on_count_in_done(self):
+        # Count-in finished: stop metronome (unless user wanted it on)
+        # and start recording
+        bpm = self._effective_bpm()
+        was_metro_enabled = self._metronome.enabled
+        # Stop metronome — user can re-enable it if they want
+        self._metronome.stop()
+        self._start_recording_now(bpm)
+        self.metronomeStateChanged.emit()
+
+    def _on_record_state_changed(self):
+        self.recordStateChanged.emit()
+
+    def _on_event_logged(self):
+        self.sequenceUpdated.emit()
+
+    def _on_player_state(self):
+        self.playerStateChanged.emit()
+
+    def _playback_trigger(self, pad_index: int, velocity: int):
+        """Called by Player for each recorded NOTE_ON event."""
+        if not self._project:
+            return
+        bank = self._project.active_bank()
+        if not bank or not (0 <= pad_index < len(bank.pads)):
+            return
+        pad = bank.pads[pad_index]
+        if not pad.sample_id:
+            return
+        sample = self._project.sample_by_id(pad.sample_id)
+        if not sample:
+            return
+        self.engine.trigger_pad(pad, sample)
+        self._pad_model.set_active(pad_index, True)
+
+    def _playback_release(self, pad_index: int):
+        """Called by Player for each recorded NOTE_OFF event."""
+        if not self._project:
+            return
+        bank = self._project.active_bank()
+        if not bank or not (0 <= pad_index < len(bank.pads)):
+            return
+        pad = bank.pads[pad_index]
+        self.engine.release_pad(pad)
+        self._pad_model.set_active(pad_index, False)
+
+    def _effective_bpm(self) -> float:
+        """Best available BPM: project BPM > detected > 0."""
+        if self._detected_bpm > 0:
+            return self._detected_bpm
+        if self._bpm > 0:
+            return self._bpm
+        return 0.0
+
+    # ---- Keyboard shortcuts ----
+    @pyqtSlot(str, result=int)
+    def keyToPadIndex(self, key: str) -> int:
+        """
+        Map a keyboard key (1-char string) to a pad index.
+        Layout (4 rows × 4 cols by default, expandable):
+          Row 1: 1 2 3 4 5 6
+          Row 2: Q W E R T Y
+          Row 3: A S D F G H
+          Row 4: Z X C V B N
+        Returns -1 if no mapping.
+        """
+        if not key:
+            return -1
+        k = key.upper()
+        cols = self._pad_grid_cols()
+        rows_layout = {
+            "1234567890": 0,
+            "QWERTYUIOP": 1,
+            "ASDFGHJKL":  2,
+            "ZXCVBNM":    3,
+        }
+        for chars, row in rows_layout.items():
+            if k in chars:
+                col = chars.index(k)
+                if col >= cols:
+                    return -1
+                pad_index = row * cols + col
+                if self._project:
+                    bank = self._project.active_bank()
+                    if bank and 0 <= pad_index < len(bank.pads):
+                        return pad_index
+                return -1
+        return -1
+
+    def _pad_grid_cols(self) -> int:
+        """Match the QML grid column logic."""
+        gs = self._settings.pad_layout.grid_size
+        if gs <= 16:
+            return 4
+        if gs <= 25:
+            return 5
+        return 6
 
     @pyqtSlot()
     def resetCurrentSample(self):
@@ -1103,7 +1763,13 @@ class SamplerController(QObject):
             self._bpm = project.analyses[0].bpm
             self._key = project.analyses[0].key or ""
             self.bpmChanged.emit()
+            # NEW: propagate project BPM to engine for loop sync
+            try:
+                self.engine.set_project_bpm(self._bpm)
+            except AttributeError:
+                pass
         self._stem_peak_cache.clear()
+        self._stem_annotation_cache.clear()  # NEW: reset annotations cache
         self._sample_originals.clear()
         self._current_pad_index = -1
         self._current_peaks = []
@@ -1140,6 +1806,9 @@ class SamplerController(QObject):
             "reverse":           getattr(sample, "reverse", False),
             "fade_in_samples":   getattr(sample, "fade_in_samples", 0),
             "fade_out_samples":  getattr(sample, "fade_out_samples", 0),
+            "cutoff_hz":         getattr(sample, "cutoff_hz", 20000.0),
+            "pan":               getattr(sample, "pan", 0.0),
+            "loop_beats":        getattr(sample, "loop_beats", 0),
         }
 
     def _set_current_pad(self, pad_index: int):
@@ -1152,8 +1821,50 @@ class SamplerController(QObject):
         s = self._current_sample()
         if s:
             self._ensure_originals(s)
+            # NEW: auto-load annotations for this stem (cached)
+            self._auto_load_annotations_for_current()
         self.currentSampleChanged.emit()
         self.editorParamsChanged.emit()
+
+    def _auto_load_annotations_for_current(self):
+        """Load (or compute & cache) annotations for the current sample's stem."""
+        s = self._current_sample()
+        if not s or not s.source_stem_id or not self._project:
+            self._annotation_model.set_annotations([])
+            return
+
+        stem_id = s.source_stem_id
+        # Check cache first
+        if stem_id in self._stem_annotation_cache:
+            self._annotation_model.set_annotations(
+                self._stem_annotation_cache[stem_id]
+            )
+            return
+
+        # Not cached — analyze now (background-safe but fast for stems)
+        stem = self._project.stem_by_id(stem_id)
+        if not stem or not stem.path or not stem.path.exists():
+            self._annotation_model.set_annotations([])
+            return
+
+        try:
+            from app.audio.analysis.sample_analyzer import analyze_sample
+            annotations = analyze_sample(stem.path)
+            total = float(stem.duration_samples)
+            qml_ann = []
+            for ann in annotations:
+                qml_ann.append({
+                    "start_frac": max(0.0, min(1.0, ann.start_sample / total)),
+                    "end_frac": max(0.0, min(1.0, ann.end_sample / total)),
+                    "kind": ann.kind.value,
+                    "color": ann.color,
+                    "label": ann.label,
+                })
+            self._stem_annotation_cache[stem_id] = qml_ann
+            self._annotation_model.set_annotations(qml_ann)
+        except Exception as e:
+            log.warning("Auto-analysis failed: %s", e)
+            self._annotation_model.set_annotations([])
 
     def _refresh_current_peaks(self):
         s = self._current_sample()
@@ -1183,18 +1894,43 @@ class SamplerController(QObject):
 
     @pyqtSlot(float, float)
     def setCurrentSampleRegion(self, start_frac: float, end_frac: float):
+        """
+        Update the sample region (start/end) WITHOUT re-rendering audio.
+        Use during interactive drag — call commitCurrentSampleRegion() on
+        release to actually re-render the audio buffer.
+        """
         s = self._current_sample()
         if not s or not s.source_stem_id: return
         stem = self._project.stem_by_id(s.source_stem_id)
         if not stem: return
         a = max(0.0, min(1.0, min(start_frac, end_frac)))
         b = max(0.0, min(1.0, max(start_frac, end_frac)))
-        min_samples = stem.sample_rate // 20
+        min_samples = max(1, stem.sample_rate // 20)
         self._ensure_originals(s)
         s.start_sample = int(a * stem.duration_samples)
-        s.end_sample = max(s.start_sample + min_samples,
-                            int(b * stem.duration_samples))
-        self.engine.register_sample(s)
+        s.end_sample = max(
+            s.start_sample + min_samples,
+            int(b * stem.duration_samples),
+        )
+        # Emit so QML bindings refresh (marker positions, duration display)
+        self.currentSampleChanged.emit()
+
+    @pyqtSlot()
+    def commitCurrentSampleRegion(self):
+        """
+        Re-render the audio buffer for the current sample.
+        Call this after a drag is complete, not on every pixel move.
+        """
+        s = self._current_sample()
+        if not s: return
+        try:
+            self.engine.register_sample(s)
+        except Exception as e:
+            log.warning("commitCurrentSampleRegion: register failed: %s", e)
+        # Refresh peaks too — region changed so the visible waveform may differ
+        # (we use stem-level peaks so they don't actually change, but keep this
+        # for future safety)
+        self.editorParamsChanged.emit()
         self.currentSampleChanged.emit()
 
     def _on_import_error(self, msg: str):

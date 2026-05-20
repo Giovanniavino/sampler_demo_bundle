@@ -164,6 +164,10 @@ class Sample:
     fade_in_samples: int = 64
     fade_out_samples: int = 256
     normalized: bool = False
+    # NEW: extended playback parameters
+    cutoff_hz: float = 20000.0            # low-pass filter, 20kHz = off
+    pan: float = 0.0 
+    loop_beats: int = 0
 
     # Metadata
     bpm: Optional[float] = None

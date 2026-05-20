@@ -33,6 +33,12 @@ ApplicationWindow {
         onAccepted: controller.loadTrack(selectedFile.toString())
     }
 
+    FolderDialog {
+        id: stemsFolderDialog
+        title: "Choose folder for stems & samples"
+        onAccepted: controller.setStemsOutputDir(selectedFolder.toString())
+    }
+
     // ════════════════════════════════════════════════════════════════
     // FIRST-LAUNCH DIALOG
     // ════════════════════════════════════════════════════════════════
@@ -128,67 +134,265 @@ ApplicationWindow {
     Rectangle {
         id: topBar
         anchors.top: parent.top
-        width: parent.width; height: 32
+        width: parent.width; height: 56
         color: cPanel
 
-        RowLayout {
-            anchors.fill: parent; anchors.margins: 4; spacing: 6
+        Column {
+            anchors.fill: parent
+            anchors.margins: 4
+            spacing: 2
 
-            Rectangle {
-                width: 60; height: 24; radius: 4
-                color: loadM.containsMouse ? cAccent : cCard
-                Text { anchors.centerIn: parent; text: "Load"
-                    color: cText; font.pixelSize: 11; font.bold: true }
-                MouseArea { id: loadM; anchors.fill: parent
-                    hoverEnabled: true; onClicked: fileDialog.open() }
-            }
-            Rectangle {
-                width: 60; height: 24; radius: 4
-                color: stopM.containsMouse ? cRed : cCard
-                Text { anchors.centerIn: parent; text: "Stop"
-                    color: cText; font.pixelSize: 11; font.bold: true }
-                MouseArea { id: stopM; anchors.fill: parent
-                    hoverEnabled: true; onClicked: controller.stopAll() }
-            }
-            Rectangle {
-                width: 28; height: 24; radius: 4
-                color: showSettings ? cAccent : (setM.containsMouse ? cCard : "transparent")
-                border.color: cBorder
-                Text { anchors.centerIn: parent; text: "⚙"
-                    color: cText; font.pixelSize: 13 }
-                MouseArea { id: setM; anchors.fill: parent
-                    hoverEnabled: true
-                    onClicked: { showSettings = !showSettings; showSampleEdit = false } }
-            }
+            // Row 1: Load, Stop, Settings, Mode, Track info, Metronome
+            RowLayout {
+                width: parent.width
+                spacing: 6
 
-            Rectangle {
-                width: 56; height: 24; radius: 12
-                color: controller.qualityMode === "fast" ? "#1A2A1A" : "#1A1A30"
-                border.color: controller.qualityMode === "fast" ? cGreen : cAccent
-                Text { anchors.centerIn: parent
-                    text: controller.qualityMode === "fast" ? "⚡Fast" : "✦Qual"
-                    color: controller.qualityMode === "fast" ? cGreen : cAccent
-                    font.pixelSize: 10; font.bold: true }
-            }
-
-            Item { Layout.fillWidth: true }
-
-            // Track info: name, BPM (fractional), time signature, key
-            Text {
-                text: {
-                    var name = controller.trackName || "No track"
-                    var bpm = controller.detectedBpm > 0
-                        ? controller.detectedBpm.toFixed(2) + " BPM"
-                        : (controller.bpm > 0 ? controller.bpm.toFixed(1) + " BPM" : "")
-                    var ts = controller.detectedTimeSignature
-                        && controller.detectedBpm > 0
-                        ? " (" + controller.detectedTimeSignature + ")" : ""
-                    var key = controller.detectedKeyEnglish || controller.trackKey || ""
-                    return name
-                        + (bpm ? "  •  " + bpm + ts : "")
-                        + (key ? "  •  " + key : "")
+                Rectangle {
+                    width: 60; height: 24; radius: 4
+                    color: loadM.containsMouse ? cAccent : cCard
+                    Text { anchors.centerIn: parent; text: "Load"
+                        color: cText; font.pixelSize: 11; font.bold: true }
+                    MouseArea { id: loadM; anchors.fill: parent
+                        hoverEnabled: true; onClicked: fileDialog.open() }
                 }
-                color: cText; font.pixelSize: 11
+                Rectangle {
+                    width: 28; height: 24; radius: 4
+                    color: showSettings ? cAccent
+                        : (setM.containsMouse ? cCard : "transparent")
+                    border.color: cBorder
+                    Text { anchors.centerIn: parent; text: "⚙"
+                        color: cText; font.pixelSize: 13 }
+                    MouseArea { id: setM; anchors.fill: parent
+                        hoverEnabled: true
+                        onClicked: { showSettings = !showSettings
+                            showSampleEdit = false } }
+                }
+                Rectangle {
+                    width: 56; height: 24; radius: 12
+                    color: controller.qualityMode === "fast" ? "#1A2A1A" : "#1A1A30"
+                    border.color: controller.qualityMode === "fast" ? cGreen : cAccent
+                    Text { anchors.centerIn: parent
+                        text: controller.qualityMode === "fast" ? "⚡Fast" : "✦Qual"
+                        color: controller.qualityMode === "fast" ? cGreen : cAccent
+                        font.pixelSize: 10; font.bold: true }
+                }
+
+                Item { Layout.fillWidth: true }
+
+                // Metronome blink indicator
+                Rectangle {
+                    visible: controller.metronomeEnabled
+                        || controller.isCountIn
+                        || controller.isRecording
+                    width: 14; height: 14; radius: 7
+                    color: controller.isDownbeat ? cYellow : cAccent
+                    opacity: controller.currentBeat % 1 === 0
+                        ? (beatPulse.running ? 1.0 : 0.3) : 0.3
+                    SequentialAnimation on opacity {
+                        id: beatPulse
+                        running: false
+                        NumberAnimation { from: 0.3; to: 1.0; duration: 50 }
+                        NumberAnimation { from: 1.0; to: 0.3; duration: 250 }
+                    }
+                    Connections {
+                        target: controller
+                        function onBeatTick() { beatPulse.start() }
+                    }
+                }
+
+                Text {
+                    text: {
+                        var name = controller.trackName || "No track"
+                        var bpm = controller.detectedBpm > 0
+                            ? controller.detectedBpm.toFixed(2) + " BPM"
+                            : (controller.bpm > 0
+                                ? controller.bpm.toFixed(1) + " BPM" : "")
+                        var ts = controller.detectedTimeSignature
+                            && controller.detectedBpm > 0
+                            ? " (" + controller.detectedTimeSignature + ")" : ""
+                        var key = controller.detectedKeyEnglish
+                            || controller.trackKey || ""
+                        return name
+                            + (bpm ? "  •  " + bpm + ts : "")
+                            + (key ? "  •  " + key : "")
+                    }
+                    color: cText; font.pixelSize: 11
+                }
+            }
+
+            // Row 2: Transport (Metronome, Rec, Back, Play, Pause, Forward, Stop)
+            RowLayout {
+                width: parent.width
+                spacing: 4
+
+                Rectangle {
+                    width: 28; height: 22; radius: 4
+                    color: controller.metronomeEnabled ? cYellow : cCard
+                    border.color: cBorder
+                    Text { anchors.centerIn: parent; text: "♩"
+                        color: controller.metronomeEnabled ? cBg : cText
+                        font.pixelSize: 14; font.bold: true }
+                    MouseArea { anchors.fill: parent
+                        onClicked: controller.toggleMetronome() }
+                }
+
+                Rectangle {
+                    width: 28; height: 22; radius: 4
+                    color: controller.isRecording ? cRed
+                        : (controller.isRecordArmed ? cOrange : cCard)
+                    border.color: controller.isRecording ? cRed : cBorder
+                    Text { anchors.centerIn: parent; text: "●"
+                        color: controller.isRecording
+                            || controller.isRecordArmed ? "white" : cRed
+                        font.pixelSize: 13; font.bold: true }
+                    MouseArea { anchors.fill: parent
+                        onClicked: {
+                            if (controller.isRecording) controller.stopRecord()
+                            else controller.armRecord()
+                        }
+                    }
+                }
+
+                Rectangle {
+                    width: 28; height: 22; radius: 4
+                    color: backM.containsMouse ? cAccent : cCard
+                    border.color: cBorder
+                    Text { anchors.centerIn: parent; text: "⏮"
+                        color: cText; font.pixelSize: 12 }
+                    MouseArea { id: backM; anchors.fill: parent
+                        hoverEnabled: true
+                        onClicked: controller.seekToStart() }
+                }
+                Rectangle {
+                    width: 28; height: 22; radius: 4
+                    color: prevM.containsMouse ? cAccent : cCard
+                    border.color: cBorder
+                    Text { anchors.centerIn: parent; text: "⏪"
+                        color: cText; font.pixelSize: 12 }
+                    MouseArea { id: prevM; anchors.fill: parent
+                        hoverEnabled: true
+                        onClicked: controller.seekBackward() }
+                }
+                Rectangle {
+                    width: 32; height: 22; radius: 4
+                    color: controller.isPlayingSequence ? cGreen
+                        : (playM.containsMouse ? cAccent : cCard)
+                    border.color: cBorder
+                    Text { anchors.centerIn: parent
+                        text: controller.isPlayingSequence ? "⏸" : "▶"
+                        color: controller.isPlayingSequence ? cBg : cText
+                        font.pixelSize: 14; font.bold: true }
+                    MouseArea { id: playM; anchors.fill: parent
+                        hoverEnabled: true
+                        onClicked: {
+                            if (controller.isPlayingSequence)
+                                controller.pauseSequence()
+                            else
+                                controller.playSequence()
+                        }
+                    }
+                }
+                Rectangle {
+                    width: 28; height: 22; radius: 4
+                    color: nextM.containsMouse ? cAccent : cCard
+                    border.color: cBorder
+                    Text { anchors.centerIn: parent; text: "⏩"
+                        color: cText; font.pixelSize: 12 }
+                    MouseArea { id: nextM; anchors.fill: parent
+                        hoverEnabled: true
+                        onClicked: controller.seekForward() }
+                }
+                Rectangle {
+                    width: 28; height: 22; radius: 4
+                    color: stopM.containsMouse ? cRed : cCard
+                    border.color: cBorder
+                    Text { anchors.centerIn: parent; text: "⏹"
+                        color: cText; font.pixelSize: 12 }
+                    MouseArea { id: stopM; anchors.fill: parent
+                        hoverEnabled: true
+                        onClicked: {
+                            controller.stopSequence()
+                            controller.stopAll()
+                        }
+                    }
+                }
+
+                Item { width: 8; height: 1 }
+
+                // Recording event counter
+                Rectangle {
+                    visible: controller.recordedEventCount > 0
+                    width: cntT.width + 16; height: 22; radius: 11
+                    color: cCard
+                    border.color: controller.isRecording ? cRed : cBorder
+                    Text { id: cntT; anchors.centerIn: parent
+                        text: "● " + controller.recordedEventCount + " events"
+                        color: controller.isRecording ? cRed : cMuted
+                        font.pixelSize: 9; font.bold: true }
+                    MouseArea { anchors.fill: parent
+                        onClicked: controller.clearSequence() }
+                }
+
+                Item { Layout.fillWidth: true }
+
+                // Quantize indicator
+                Rectangle {
+                    visible: controller.quantizePercent > 0
+                    width: qT.width + 14; height: 22; radius: 11
+                    color: "#1A2A1A"
+                    border.color: cGreen
+                    Text { id: qT; anchors.centerIn: parent
+                        text: "Q " + controller.quantizePercent.toFixed(0) + "%"
+                        color: cGreen
+                        font.pixelSize: 9; font.bold: true }
+                }
+            }
+        }
+
+        // Keyboard focus + shortcut handling
+        Item {
+            anchors.fill: parent
+            focus: true
+            Keys.onPressed: function(event) {
+                if (event.isAutoRepeat) return
+                // Transport shortcuts
+                if (event.key === Qt.Key_Space) {
+                    if (controller.isPlayingSequence)
+                        controller.pauseSequence()
+                    else
+                        controller.playSequence()
+                    event.accepted = true
+                    return
+                }
+                if (event.key === Qt.Key_R && (event.modifiers & Qt.ControlModifier)) {
+                    if (controller.isRecording) controller.stopRecord()
+                    else controller.armRecord()
+                    event.accepted = true
+                    return
+                }
+                if (event.key === Qt.Key_M && (event.modifiers & Qt.ControlModifier)) {
+                    controller.toggleMetronome()
+                    event.accepted = true
+                    return
+                }
+                // Pad shortcuts
+                if (event.text && event.text.length === 1) {
+                    var padIdx = controller.keyToPadIndex(event.text)
+                    if (padIdx >= 0) {
+                        controller.triggerPad(padIdx)
+                        event.accepted = true
+                    }
+                }
+            }
+            Keys.onReleased: function(event) {
+                if (event.isAutoRepeat) return
+                if (event.text && event.text.length === 1) {
+                    var padIdx = controller.keyToPadIndex(event.text)
+                    if (padIdx >= 0) {
+                        controller.releasePad(padIdx)
+                        event.accepted = true
+                    }
+                }
             }
         }
     }
@@ -419,24 +623,70 @@ ApplicationWindow {
                     opacity: 0.85
                     radius: 2
 
-                    // Tooltip-ish label on hover
+                    // Rich tooltip on hover — shows what this annotation is
                     Rectangle {
                         visible: mouseAr.containsMouse
-                        x: 0; y: parent.height + 2
-                        width: lblTxt.width + 8
-                        height: lblTxt.height + 4
-                        color: cCard
+                        x: Math.max(0, Math.min(parent.x + parent.width/2 - width/2,
+                                                 wfBg.width - width - 4))
+                        y: parent.height + 6
+                        width: tooltipCol.width + 12
+                        height: tooltipCol.height + 8
+                        color: cPanel
                         border.color: parent.color
-                        radius: 3
+                        border.width: 2
+                        radius: 4
                         z: 99
-                        Text {
-                            id: lblTxt
+
+                        Column {
+                            id: tooltipCol
                             anchors.centerIn: parent
-                            text: model.label
-                            color: cText
-                            font.pixelSize: 9
+                            spacing: 2
+
+                            // Kind badge
+                            Text {
+                                text: {
+                                    switch(model.kind) {
+                                        case "phrase": return "🔵 PHRASE"
+                                        case "hit": return "🔴 HIT"
+                                        case "break": return "⚫ BREAK"
+                                        case "core": return "⭐ CORE"
+                                        default: return model.kind.toUpperCase()
+                                    }
+                                }
+                                color: cText
+                                font.pixelSize: 10
+                                font.bold: true
+                            }
+
+                            // Label (e.g., "vocal phrase 1")
+                            Text {
+                                text: model.label
+                                color: cMuted
+                                font.pixelSize: 9
+                            }
+
+                            // Explanation
+                            Text {
+                                text: {
+                                    switch(model.kind) {
+                                        case "phrase": 
+                                            return "Vocal or melodic phrase\n(sustained sound)"
+                                        case "hit":
+                                            return "Drum or percussion hit\n(sharp attack)"
+                                        case "break":
+                                            return "Silence gap\n(pause between sounds)"
+                                        case "core":
+                                            return "Essence of the phrase\n(most important part)"
+                                        default: return ""
+                                    }
+                                }
+                                color: cMuted
+                                font.pixelSize: 8
+                                lineHeight: 1.2
+                            }
                         }
                     }
+
                     MouseArea {
                         id: mouseAr
                         anchors.fill: parent
@@ -456,12 +706,34 @@ ApplicationWindow {
                 color: cAccent; opacity: 0.18
             }
 
+            // NEW: Playback cursor (playhead) — moves during playback
+            Rectangle {
+                id: playhead
+                visible: controller.isPlaying
+                    && controller.playbackPositionFrac >= controller.zoomStart
+                    && controller.playbackPositionFrac <= controller.zoomEnd
+                x: wfBg.fracToVis(controller.playbackPositionFrac) - 1
+                y: 0
+                width: 2
+                height: wfBg.height
+                color: cYellow
+                z: 50
+
+                Rectangle {
+                    anchors.top: parent.top
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    width: 10; height: 10; radius: 5
+                    color: cYellow
+                }
+            }
+
             // START marker
             Rectangle {
                 id: startMarker
                 visible: controller.currentSampleName !== ""
                 width: 14; height: wfBg.height
                 color: "transparent"
+                // Binding restored after drag via Binding element below
                 x: wfBg.fracToVis(controller.currentSampleStartFrac) - width / 2
                 Rectangle {
                     x: parent.width / 2 - 1; width: 2
@@ -483,8 +755,13 @@ ApplicationWindow {
                     onPositionChanged: if (drag.active) {
                         var px = startMarker.x + startMarker.width / 2
                         var f  = wfBg.snapFrac(wfBg.visToFrac(px))
+                        // preview only — no audio re-render during drag
                         controller.setCurrentSampleRegion(
                             f, controller.currentSampleEndFrac)
+                    }
+                    onReleased: {
+                        // commit: re-render audio with the new region
+                        controller.commitCurrentSampleRegion()
                     }
                 }
             }
@@ -517,6 +794,9 @@ ApplicationWindow {
                         var f  = wfBg.snapFrac(wfBg.visToFrac(px))
                         controller.setCurrentSampleRegion(
                             controller.currentSampleStartFrac, f)
+                    }
+                    onReleased: {
+                        controller.commitCurrentSampleRegion()
                     }
                 }
             }
@@ -696,17 +976,82 @@ ApplicationWindow {
     }
 
     // ════════════════════════════════════════════════════════════════
-    // SAMPLE EDIT OVERLAY
+    // SAMPLE EDIT OVERLAY — scrollable + per-param resets
     // ════════════════════════════════════════════════════════════════
+
+    // Reusable parameter row: slider + value display + reset button
+    component ParamRow: Column {
+        property string title: ""
+        property real value: 0
+        property real fromVal: 0
+        property real toVal: 1
+        property real stepVal: 0.01
+        property string valueText: ""
+        property color valueColor: cMuted
+        property bool applyOnRelease: false  // true for expensive ops (pitch/time)
+        property real defaultValue: 0
+        signal applyValue(real v)
+        signal resetClicked()
+
+        Layout.fillWidth: true
+        spacing: 4
+
+        Item {
+            width: parent.width
+            height: 18
+            Text {
+                id: titleLabel
+                anchors.left: parent.left
+                anchors.verticalCenter: parent.verticalCenter
+                text: title; color: cText
+                font.pixelSize: 12; font.bold: true
+            }
+            MiniBtn {
+                id: resetBtn
+                anchors.right: parent.right
+                anchors.verticalCenter: parent.verticalCenter
+                label: "↺"
+                selColor: cOrange
+                onClicked: resetClicked()
+            }
+            Text {
+                anchors.right: resetBtn.left
+                anchors.rightMargin: 6
+                anchors.verticalCenter: parent.verticalCenter
+                text: valueText
+                color: valueColor; font.pixelSize: 11
+            }
+        }
+        Slider {
+            id: paramSlider
+            width: parent.width
+            from: parent.fromVal
+            to: parent.toVal
+            stepSize: parent.stepVal
+            value: parent.value
+            onMoved: if (!parent.applyOnRelease) parent.applyValue(value)
+            onPressedChanged: if (parent.applyOnRelease && !pressed)
+                parent.applyValue(value)
+        }
+    }
+
     Rectangle {
         anchors.fill: parent
         color: cBg; visible: showSampleEdit; z: 9
 
-        Column {
-            anchors.fill: parent; anchors.margins: 12; spacing: 8
+        // Header (sticky)
+        Item {
+            id: editHeader
+            anchors.top: parent.top
+            anchors.left: parent.left; anchors.right: parent.right
+            anchors.margins: 12
+            height: 32
 
             Row {
-                width: parent.width; spacing: 8
+                id: editHeaderLeft
+                anchors.left: parent.left
+                anchors.verticalCenter: parent.verticalCenter
+                spacing: 8
                 Text { text: "Sample Editor"; color: cText
                     font.pixelSize: 16; font.bold: true
                     anchors.verticalCenter: parent.verticalCenter }
@@ -722,15 +1067,26 @@ ApplicationWindow {
                 Text { text: controller.currentSampleName
                     color: cText; font.pixelSize: 12
                     anchors.verticalCenter: parent.verticalCenter
-                    elide: Text.ElideRight; width: 300 }
-                Item { width: 1; height: 1; Layout.fillWidth: true }
+                    elide: Text.ElideRight; width: 200 }
+            }
+
+            Row {
+                anchors.right: parent.right
+                anchors.verticalCenter: parent.verticalCenter
+                spacing: 8
                 MiniBtn {
-                    label: "▶ Preview"; selColor: cGreen
+                    label: "▶"; selColor: cGreen
                     anchors.verticalCenter: parent.verticalCenter
                     onClicked: controller.previewCurrentSample()
                 }
                 MiniBtn {
-                    label: "Reset"; selColor: cOrange
+                    label: "⏹ Stop"; selColor: cRed
+                    anchors.verticalCenter: parent.verticalCenter
+                    onClicked: if (controller.currentPadIndex >= 0)
+                        controller.stopPad(controller.currentPadIndex)
+                }
+                MiniBtn {
+                    label: "Reset All"; selColor: cOrange
                     anchors.verticalCenter: parent.verticalCenter
                     onClicked: controller.resetCurrentSample()
                 }
@@ -740,132 +1096,255 @@ ApplicationWindow {
                     onClicked: showSampleEdit = false
                 }
             }
+        }
 
-            Rectangle { width: parent.width; height: 1; color: cBorder }
+        Rectangle {
+            anchors.top: editHeader.bottom
+            anchors.left: parent.left; anchors.right: parent.right
+            anchors.leftMargin: 12; anchors.rightMargin: 12
+            height: 1; color: cBorder
+        }
 
-            GridLayout {
+        // Scrollable content
+        Flickable {
+            anchors.top: editHeader.bottom; anchors.topMargin: 8
+            anchors.left: parent.left; anchors.right: parent.right
+            anchors.bottom: parent.bottom
+            anchors.leftMargin: 12; anchors.rightMargin: 12
+            anchors.bottomMargin: 12
+            clip: true
+            contentWidth: width
+            contentHeight: paramsCol.height
+            ScrollBar.vertical: ScrollBar { width: 6 }
+
+            Column {
+                id: paramsCol
                 width: parent.width
-                columns: 2
-                columnSpacing: 24
-                rowSpacing: 10
+                spacing: 10
 
-                Column {
-                    Layout.fillWidth: true; spacing: 4
-                    Row { width: parent.width
-                        Text { text: "Gain"; color: cText
-                            font.pixelSize: 12; font.bold: true }
-                        Item { width: 1; height: 1
-                            anchors.verticalCenter: parent.verticalCenter }
-                        Text {
-                            anchors.right: parent.right
-                            text: controller.currentSampleGainDb.toFixed(1) + " dB"
-                            color: cMuted; font.pixelSize: 11
-                        }
-                    }
-                    Slider {
-                        width: parent.width
-                        from: -24; to: 12; stepSize: 0.1
+                GridLayout {
+                    width: parent.width
+                    columns: 2
+                    columnSpacing: 24
+                    rowSpacing: 10
+
+                    ParamRow {
+                        title: "Gain"
+                        fromVal: -24; toVal: 12; stepVal: 0.1
                         value: controller.currentSampleGainDb
-                        onMoved: controller.setCurrentSampleGain(value)
+                        valueText: controller.currentSampleGainDb.toFixed(1) + " dB"
+                        defaultValue: 0
+                        onApplyValue: controller.setCurrentSampleGain(v)
+                        onResetClicked: controller.setCurrentSampleGain(0)
                     }
-                }
-                Column {
-                    Layout.fillWidth: true; spacing: 4
-                    Row { width: parent.width
-                        Text { text: "Pitch"; color: cText
-                            font.pixelSize: 12; font.bold: true }
-                        Text {
-                            anchors.right: parent.right
-                            text: (controller.currentSamplePitchSemitones >= 0 ? "+" : "")
-                                + controller.currentSamplePitchSemitones.toFixed(1) + " st"
-                            color: cMuted; font.pixelSize: 11
-                        }
-                    }
-                    Slider {
-                        width: parent.width
-                        from: -12; to: 12; stepSize: 0.5
+                    ParamRow {
+                        title: "Pitch"
+                        fromVal: -12; toVal: 12; stepVal: 0.5
                         value: controller.currentSamplePitchSemitones
-                        onMoved: controller.setCurrentSamplePitch(value)
+                        valueText: (controller.currentSamplePitchSemitones >= 0 ? "+" : "")
+                            + controller.currentSamplePitchSemitones.toFixed(1) + " st"
+                        applyOnRelease: true  // expensive: only on release
+                        defaultValue: 0
+                        onApplyValue: controller.setCurrentSamplePitch(v)
+                        onResetClicked: controller.setCurrentSamplePitch(0)
                     }
-                }
-                Column {
-                    Layout.fillWidth: true; spacing: 4
-                    Row { width: parent.width
-                        Text { text: "Time Stretch"; color: cText
-                            font.pixelSize: 12; font.bold: true }
-                        Text {
-                            anchors.right: parent.right
-                            text: controller.currentSampleTimeStretch.toFixed(2) + "×"
-                            color: cMuted; font.pixelSize: 11
-                        }
-                    }
-                    Slider {
-                        width: parent.width
-                        from: 0.5; to: 2.0; stepSize: 0.01
+                    ParamRow {
+                        title: "Time Stretch"
+                        fromVal: 0.5; toVal: 2.0; stepVal: 0.01
                         value: controller.currentSampleTimeStretch
-                        onMoved: controller.setCurrentSampleTimeStretch(value)
+                        valueText: controller.currentSampleTimeStretch.toFixed(2) + "×"
+                        applyOnRelease: true  // expensive: only on release
+                        defaultValue: 1.0
+                        onApplyValue: controller.setCurrentSampleTimeStretch(v)
+                        onResetClicked: controller.setCurrentSampleTimeStretch(1.0)
                     }
-                }
-                Column {
-                    Layout.fillWidth: true; spacing: 4
-                    Text { text: "Reverse"; color: cText
-                        font.pixelSize: 12; font.bold: true }
-                    Row { spacing: 8
+                    Column {
+                        Layout.fillWidth: true; spacing: 4
+                        Item {
+                            width: parent.width; height: 18
+                            Text { text: "Reverse"; color: cText
+                                font.pixelSize: 12; font.bold: true
+                                anchors.left: parent.left
+                                anchors.verticalCenter: parent.verticalCenter }
+                            Text {
+                                anchors.right: parent.right
+                                anchors.verticalCenter: parent.verticalCenter
+                                text: controller.currentSampleReverse ? "ON" : "OFF"
+                                color: controller.currentSampleReverse ? cGreen : cMuted
+                                font.pixelSize: 11; font.bold: true
+                            }
+                        }
                         Switch {
                             checked: controller.currentSampleReverse
                             onToggled: controller.setCurrentSampleReverse(checked)
                         }
-                        Text {
-                            text: controller.currentSampleReverse ? "ON" : "OFF"
-                            color: controller.currentSampleReverse ? cGreen : cMuted
-                            font.pixelSize: 11; font.bold: true
-                            anchors.verticalCenter: parent.verticalCenter
-                        }
                     }
-                }
-                Column {
-                    Layout.fillWidth: true; spacing: 4
-                    Row { width: parent.width
-                        Text { text: "Fade In"; color: cText
-                            font.pixelSize: 12; font.bold: true }
-                        Text {
-                            anchors.right: parent.right
-                            text: controller.currentSampleFadeInMs.toFixed(0) + " ms"
-                            color: cMuted; font.pixelSize: 11
-                        }
-                    }
-                    Slider {
-                        width: parent.width
-                        from: 0; to: 500; stepSize: 1
+                    ParamRow {
+                        title: "Fade In"
+                        fromVal: 0; toVal: 500; stepVal: 1
                         value: controller.currentSampleFadeInMs
-                        onMoved: controller.setCurrentSampleFadeInMs(value)
+                        valueText: controller.currentSampleFadeInMs.toFixed(0) + " ms"
+                        defaultValue: 0
+                        onApplyValue: controller.setCurrentSampleFadeInMs(v)
+                        onResetClicked: controller.setCurrentSampleFadeInMs(0)
                     }
-                }
-                Column {
-                    Layout.fillWidth: true; spacing: 4
-                    Row { width: parent.width
-                        Text { text: "Fade Out"; color: cText
-                            font.pixelSize: 12; font.bold: true }
-                        Text {
-                            anchors.right: parent.right
-                            text: controller.currentSampleFadeOutMs.toFixed(0) + " ms"
-                            color: cMuted; font.pixelSize: 11
+                    ParamRow {
+                        title: "Fade Out"
+                        fromVal: 0; toVal: 500; stepVal: 1
+                        value: controller.currentSampleFadeOutMs
+                        valueText: controller.currentSampleFadeOutMs.toFixed(0) + " ms"
+                        defaultValue: 0
+                        onApplyValue: controller.setCurrentSampleFadeOutMs(v)
+                        onResetClicked: controller.setCurrentSampleFadeOutMs(0)
+                    }
+                    // Cutoff — logarithmic mapping
+                    Column {
+                        Layout.fillWidth: true; spacing: 4
+                        Item {
+                            width: parent.width; height: 18
+                            Text { text: "Cutoff (LowPass)"; color: cText
+                                font.pixelSize: 12; font.bold: true
+                                anchors.left: parent.left
+                                anchors.verticalCenter: parent.verticalCenter }
+                            MiniBtn {
+                                id: cutResetBtn
+                                anchors.right: parent.right
+                                anchors.verticalCenter: parent.verticalCenter
+                                label: "↺"
+                                selColor: cOrange
+                                onClicked: controller.setCurrentSampleCutoff(20000)
+                            }
+                            Text {
+                                anchors.right: cutResetBtn.left
+                                anchors.rightMargin: 6
+                                anchors.verticalCenter: parent.verticalCenter
+                                text: controller.currentSampleCutoffHz >= 19999
+                                    ? "OFF"
+                                    : controller.currentSampleCutoffHz < 1000
+                                        ? controller.currentSampleCutoffHz.toFixed(0) + " Hz"
+                                        : (controller.currentSampleCutoffHz / 1000).toFixed(1) + " kHz"
+                                color: controller.currentSampleCutoffHz >= 19999
+                                    ? cMuted : cAccent
+                                font.pixelSize: 11
+                                font.bold: controller.currentSampleCutoffHz < 19999
+                            }
+                        }
+                        Slider {
+                            width: parent.width
+                            from: 0; to: 100; stepSize: 0.5
+                            value: {
+                                var hz = controller.currentSampleCutoffHz
+                                var log20 = Math.log(20)
+                                var log20000 = Math.log(20000)
+                                return ((Math.log(Math.max(20, hz)) - log20)
+                                    / (log20000 - log20)) * 100
+                            }
+                            onMoved: {
+                                var log20 = Math.log(20)
+                                var log20000 = Math.log(20000)
+                                var hz = Math.exp(log20 + (value / 100) * (log20000 - log20))
+                                controller.setCurrentSampleCutoff(hz)
+                            }
                         }
                     }
-                    Slider {
-                        width: parent.width
-                        from: 0; to: 500; stepSize: 1
-                        value: controller.currentSampleFadeOutMs
-                        onMoved: controller.setCurrentSampleFadeOutMs(value)
+                    ParamRow {
+                        title: "Pan"
+                        fromVal: -1.0; toVal: 1.0; stepVal: 0.01
+                        value: controller.currentSamplePan
+                        valueText: {
+                            var p = controller.currentSamplePan
+                            if (Math.abs(p) < 0.01) return "C"
+                            return (p < 0 ? "L " : "R ")
+                                + Math.abs(p * 100).toFixed(0)
+                        }
+                        defaultValue: 0
+                        onApplyValue: controller.setCurrentSamplePan(v)
+                        onResetClicked: controller.setCurrentSamplePan(0)
                     }
                 }
-            }
 
-            Text {
-                width: parent.width
-                text: "Tip: Reset restores the start/end region and all params "
-                    + "to the values captured when this pad was first selected."
-                color: cMuted; font.pixelSize: 10; wrapMode: Text.WordWrap
+                Rectangle { width: parent.width; height: 1; color: cBorder }
+
+                // Loop Sync to BPM grid
+                Column {
+                    width: parent.width
+                    spacing: 4
+
+                    Item {
+                        width: parent.width; height: 16
+                        Row {
+                            anchors.left: parent.left
+                            anchors.verticalCenter: parent.verticalCenter
+                            spacing: 6
+                            Text { text: "Loop Sync to BPM"; color: cText
+                                font.pixelSize: 12; font.bold: true
+                                anchors.verticalCenter: parent.verticalCenter }
+                            Text {
+                                text: controller.currentSampleEffectiveBpm > 0
+                                    ? "@ " + controller.currentSampleEffectiveBpm.toFixed(1) + " BPM"
+                                    : "(BPM unknown)"
+                                color: controller.currentSampleEffectiveBpm > 0
+                                    ? cMuted : cOrange
+                                font.pixelSize: 10
+                                anchors.verticalCenter: parent.verticalCenter
+                            }
+                        }
+                        Text {
+                            anchors.right: parent.right
+                            anchors.verticalCenter: parent.verticalCenter
+                            text: controller.currentSampleLoopBeats > 0
+                                ? "🔒 " + controller.currentSampleLoopBeats + " beats"
+                                : "Free-running"
+                            color: controller.currentSampleLoopBeats > 0
+                                ? cGreen : cMuted
+                            font.pixelSize: 10; font.bold: true
+                        }
+                    }
+
+                    Row { spacing: 4; width: parent.width
+                        Repeater {
+                            model: [
+                                { label: "OFF", val: 0 },
+                                { label: "1", val: 1 },
+                                { label: "2", val: 2 },
+                                { label: "4", val: 4 },
+                                { label: "8", val: 8 },
+                                { label: "16", val: 16 },
+                                { label: "32", val: 32 }
+                            ]
+                            delegate: MiniBtn {
+                                label: modelData.label
+                                selected: controller.currentSampleLoopBeats === modelData.val
+                                selColor: modelData.val === 0 ? cBorder : cGreen
+                                onClicked: controller.setCurrentSampleLoopBeats(modelData.val)
+                            }
+                        }
+                        Item { width: 8; height: 1 }
+                        MiniBtn {
+                            label: "🎯 Auto"
+                            selColor: cAccent
+                            enabled: controller.currentSampleEffectiveBpm > 0
+                            opacity: enabled ? 1.0 : 0.4
+                            onClicked: controller.autoSyncCurrentSampleLoop()
+                        }
+                    }
+
+                    Text {
+                        text: "Useful only for continuous loops (LOOP mode). "
+                            + "Keeps the wrap point musically accurate over long playback. "
+                            + "If you don't loop, leave OFF."
+                        color: cMuted; font.pixelSize: 9
+                        wrapMode: Text.WordWrap; width: parent.width
+                    }
+                }
+
+                Text {
+                    width: parent.width
+                    text: "Tip: Tap '↺' next to a parameter to reset just that one. "
+                        + "'Reset All' restores everything (including start/end region)."
+                    color: cMuted; font.pixelSize: 9
+                    wrapMode: Text.WordWrap
+                }
             }
         }
     }
@@ -1146,6 +1625,147 @@ ApplicationWindow {
                     visible: settingsTab === 2
                     width: parent.width; spacing: 10
 
+                    // NEW: Stems & Samples Output Folder
+                    Text { text: "Output Folder (Stems & Samples)"; color: cText
+                        font.pixelSize: 13; font.bold: true }
+                    Text {
+                        text: "Where separated stems are saved for each track. "
+                            + "Folder names use the track name, not random IDs."
+                        color: cMuted; font.pixelSize: 10
+                        wrapMode: Text.WordWrap; width: parent.width
+                    }
+
+                    Row { spacing: 8; width: parent.width
+                        Rectangle {
+                            width: parent.width - 200
+                            height: 28; radius: 4
+                            color: cCard
+                            border.color: cBorder
+                            anchors.verticalCenter: parent.verticalCenter
+                            Text {
+                                anchors.fill: parent
+                                anchors.margins: 8
+                                verticalAlignment: Text.AlignVCenter
+                                text: "📁 " + controller.stemsOutputDirDisplay
+                                color: controller.stemsOutputDir === ""
+                                    ? cMuted : cText
+                                font.pixelSize: 10
+                                elide: Text.ElideMiddle
+                                font.italic: controller.stemsOutputDir === ""
+                            }
+                        }
+                        MiniBtn {
+                            label: "📂 Browse..."
+                            selected: true; selColor: cAccent
+                            anchors.verticalCenter: parent.verticalCenter
+                            onClicked: stemsFolderDialog.open()
+                        }
+                        MiniBtn {
+                            label: "↺ Reset"
+                            selColor: cOrange
+                            enabled: controller.stemsOutputDir !== ""
+                            opacity: enabled ? 1.0 : 0.4
+                            anchors.verticalCenter: parent.verticalCenter
+                            onClicked: controller.setStemsOutputDir("")
+                        }
+                    }
+
+                    Rectangle { width: parent.width; height: 1; color: cBorder }
+
+                    // NEW: Audio Output Device Selection
+                    Text { text: "Audio Output"; color: cText
+                        font.pixelSize: 13; font.bold: true }
+                    Text {
+                        text: "Choose where to send audio: speakers, headphones, "
+                            + "or external interface. Changing this restarts the engine."
+                        color: cMuted; font.pixelSize: 10
+                        wrapMode: Text.WordWrap; width: parent.width
+                    }
+
+                    Row { spacing: 8; width: parent.width
+                        Text { text: "Current:"; color: cMuted
+                            font.pixelSize: 11
+                            anchors.verticalCenter: parent.verticalCenter }
+                        Text {
+                            text: controller.currentOutputDevice
+                            color: cAccent; font.pixelSize: 12; font.bold: true
+                            anchors.verticalCenter: parent.verticalCenter
+                            elide: Text.ElideRight
+                            width: parent.width - 280
+                        }
+                        MiniBtn {
+                            label: "🔍 Refresh List"
+                            selected: true; selColor: cAccent
+                            anchors.verticalCenter: parent.verticalCenter
+                            onClicked: controller.refreshOutputDevices()
+                        }
+                    }
+
+                    // Device list (visible after refresh)
+                    Rectangle {
+                        width: parent.width
+                        height: Math.min(120, devList.contentHeight + 8)
+                        color: cCard; radius: 6
+                        border.color: cBorder; border.width: 1
+                        visible: devList.count > 0
+
+                        ListView {
+                            id: devList
+                            anchors.fill: parent; anchors.margins: 4
+                            model: controller.outputDevices
+                            clip: true
+                            spacing: 2
+
+                            delegate: Rectangle {
+                                width: devList.width; height: 28; radius: 4
+                                property bool isCurrent: modelData.name === controller.currentOutputDevice
+                                color: isCurrent ? cAccent
+                                    : (devMA.containsMouse ? cPanel : "transparent")
+                                Row {
+                                    anchors.fill: parent; anchors.margins: 6
+                                    spacing: 8
+                                    Text {
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        text: isCurrent ? "●" : "○"
+                                        color: isCurrent ? "white" : cMuted
+                                        font.pixelSize: 12
+                                    }
+                                    Text {
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        text: modelData.name
+                                        color: isCurrent ? "white" : cText
+                                        font.pixelSize: 11
+                                        font.bold: isCurrent
+                                        elide: Text.ElideRight
+                                        width: devList.width - 200
+                                    }
+                                    Text {
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        text: modelData.channels + "ch · "
+                                            + modelData.default_samplerate.toFixed(0) + " Hz"
+                                            + (modelData.is_default ? " · system default" : "")
+                                        color: isCurrent ? "#FFFFFFAA" : cMuted
+                                        font.pixelSize: 9
+                                    }
+                                }
+                                MouseArea {
+                                    id: devMA
+                                    anchors.fill: parent
+                                    hoverEnabled: true
+                                    onClicked: controller.setOutputDevice(modelData.name)
+                                }
+                            }
+                        }
+                    }
+
+                    Text {
+                        visible: devList.count === 0
+                        text: "Tap '🔍 Refresh List' to scan available devices."
+                        color: cMuted; font.pixelSize: 10; font.italic: true
+                    }
+
+                    Rectangle { width: parent.width; height: 1; color: cBorder }
+
                     Text { text: "Audio Engine"; color: cText
                         font.pixelSize: 13; font.bold: true }
 
@@ -1255,6 +1875,124 @@ ApplicationWindow {
                                 : cbSR.model[cbSR.currentIndex],
                             swPH.checked, swAN.checked, swAC.checked,
                             cbNRPre.currentText, cbNRPost.currentText)
+                    }
+
+                    Rectangle { width: parent.width; height: 1; color: cBorder }
+
+                    // NEW: Global pitch
+                    Text { text: "Global Pitch"; color: cText
+                        font.pixelSize: 13; font.bold: true }
+                    Text {
+                        text: "Pitch shift applied to ALL samples in the project. "
+                            + "Re-rendering happens immediately when you move the slider."
+                        color: cMuted; font.pixelSize: 10
+                        wrapMode: Text.WordWrap; width: parent.width
+                    }
+                    Row { spacing: 8; width: parent.width
+                        Slider {
+                            id: gpSlider
+                            width: parent.width - 100
+                            from: -12; to: 12; stepSize: 0.5
+                            value: controller.globalPitchSemitones
+                            onPressedChanged: if (!pressed) controller.setGlobalPitch(value)
+                        }
+                        Text {
+                            text: (gpSlider.value >= 0 ? "+" : "")
+                                + gpSlider.value.toFixed(1) + " st"
+                            color: Math.abs(gpSlider.value) > 0.5 ? cAccent : cMuted
+                            font.pixelSize: 12; font.bold: true
+                            width: 60
+                            anchors.verticalCenter: parent.verticalCenter
+                        }
+                        MiniBtn {
+                            label: "0"
+                            selColor: cBorder
+                            anchors.verticalCenter: parent.verticalCenter
+                            onClicked: controller.setGlobalPitch(0.0)
+                        }
+                    }
+
+                    Rectangle { width: parent.width; height: 1; color: cBorder }
+
+                    // ── NEW: Metronome & Recording ──
+                    Text { text: "Metronome & Recording"; color: cText
+                        font.pixelSize: 13; font.bold: true }
+                    Text {
+                        text: "Metronome syncs to detected BPM. Count-in plays before "
+                            + "recording starts. Quantize snaps recorded events to beat."
+                        color: cMuted; font.pixelSize: 10
+                        wrapMode: Text.WordWrap; width: parent.width
+                    }
+
+                    // Count-in bars
+                    Row { spacing: 8; width: parent.width
+                        Text { text: "Count-in (bars):"; color: cText
+                            font.pixelSize: 11
+                            anchors.verticalCenter: parent.verticalCenter }
+                        Repeater {
+                            model: [0, 1, 2, 4]
+                            delegate: MiniBtn {
+                                label: modelData === 0 ? "OFF" : modelData.toString()
+                                selected: controller.metronomeCountInBars === modelData
+                                selColor: modelData === 0 ? cBorder : cAccent
+                                anchors.verticalCenter: parent.verticalCenter
+                                onClicked: controller.setCountInBars(modelData)
+                            }
+                        }
+                    }
+
+                    // Quantize
+                    Row { spacing: 8; width: parent.width
+                        Text { text: "Quantize:"; color: cText
+                            font.pixelSize: 11
+                            anchors.verticalCenter: parent.verticalCenter
+                            width: 80 }
+                        Slider {
+                            id: qSlider
+                            width: parent.width - 200
+                            from: 0; to: 100; stepSize: 5
+                            value: controller.quantizePercent
+                            onMoved: controller.setQuantizePercent(value)
+                            anchors.verticalCenter: parent.verticalCenter
+                        }
+                        Text {
+                            text: qSlider.value === 0
+                                ? "OFF" : qSlider.value.toFixed(0) + "%"
+                            color: qSlider.value === 0 ? cMuted : cGreen
+                            font.pixelSize: 11; font.bold: qSlider.value > 0
+                            width: 50
+                            anchors.verticalCenter: parent.verticalCenter
+                        }
+                    }
+                    Text {
+                        text: "0% = raw timing (exactly as you played).  "
+                            + "100% = snap every event to nearest beat."
+                        color: cMuted; font.pixelSize: 9
+                        wrapMode: Text.WordWrap; width: parent.width
+                    }
+
+                    // Keyboard shortcuts cheatsheet
+                    Rectangle {
+                        width: parent.width; radius: 4
+                        color: cCard; border.color: cBorder; border.width: 1
+                        height: ksCol.height + 16
+
+                        Column {
+                            id: ksCol
+                            anchors.fill: parent
+                            anchors.margins: 8
+                            spacing: 3
+                            Text { text: "Keyboard Shortcuts"
+                                color: cText; font.pixelSize: 11; font.bold: true }
+                            Text { text: "• Pads: 1 2 3 4 | Q W E R | A S D F | Z X C V"
+                                color: cMuted; font.pixelSize: 9 }
+                            Text { text: "• Space = Play / Pause"
+                                color: cMuted; font.pixelSize: 9 }
+                            Text { text: "• Ctrl+R = Record / Stop record"
+                                color: cMuted; font.pixelSize: 9 }
+                            Text { text: "• Ctrl+M = Toggle metronome"
+                                color: cMuted; font.pixelSize: 9 }
+                        }
                     }
                 }
 
@@ -1406,52 +2144,146 @@ ApplicationWindow {
 
                     Rectangle { width: parent.width; height: 1; color: cBorder }
 
-                    // Sample Analysis Legend
+                    // Sample Analysis — Detailed explanation
                     Text { text: "Sample AI Analysis"; color: cText
                         font.pixelSize: 14; font.bold: true }
                     Text {
-                        text: "Tap '🎨 Analyze' on the waveform toolbar to detect "
-                            + "phrases, hits, breaks, and core regions automatically."
+                        text: "Tap '🎨 Analyze' on the waveform toolbar. The AI "
+                            + "automatically detects what's in your sample and "
+                            + "marks it with colors. Hover over the colored bars "
+                            + "to see what each part is."
                         color: cMuted; font.pixelSize: 10
                         wrapMode: Text.WordWrap; width: parent.width
                     }
 
-                    // Color legend
-                    Column {
-                        width: parent.width; spacing: 4
+                    // What each color means
+                    Text { text: "What the colors mean:"; color: cText
+                        font.pixelSize: 12; font.bold: true }
 
-                        Row { spacing: 8
-                            Rectangle { width: 16; height: 8; radius: 2
-                                color: "#3D8EF0"  // BLUE
-                                anchors.verticalCenter: parent.verticalCenter }
-                            Text { text: "Phrase — vocal/melodic"
-                                color: cText; font.pixelSize: 11
-                                anchors.verticalCenter: parent.verticalCenter }
+                    Column {
+                        width: parent.width; spacing: 6
+
+                        // PHRASE
+                        Column { spacing: 3; width: parent.width
+                            Row { spacing: 8
+                                Rectangle { width: 20; height: 10; radius: 2
+                                    color: "#3D8EF0" }
+                                Text { text: "🔵 PHRASE (BLUE)"
+                                    color: cText; font.pixelSize: 11; font.bold: true
+                                    anchors.verticalCenter: parent.verticalCenter }
+                            }
+                            Text {
+                                text: "A sustained vocal or melodic sound. "
+                                    + "Example: someone singing \"hello\" "
+                                    + "(1–2 seconds of continuous voice)."
+                                color: cMuted; font.pixelSize: 9; wrapMode: Text.WordWrap
+                                width: parent.width
+                                leftPadding: 28
+                            }
                         }
-                        Row { spacing: 8
-                            Rectangle { width: 16; height: 8; radius: 2
-                                color: "#E74C3C"  // RED
-                                anchors.verticalCenter: parent.verticalCenter }
-                            Text { text: "Hit — drum/percussion"
-                                color: cText; font.pixelSize: 11
-                                anchors.verticalCenter: parent.verticalCenter }
+
+                        // HIT
+                        Column { spacing: 3; width: parent.width
+                            Row { spacing: 8
+                                Rectangle { width: 20; height: 10; radius: 2
+                                    color: "#E74C3C" }
+                                Text { text: "🔴 HIT (RED)"
+                                    color: cText; font.pixelSize: 11; font.bold: true
+                                    anchors.verticalCenter: parent.verticalCenter }
+                            }
+                            Text {
+                                text: "A sharp, quick percussion sound. "
+                                    + "Example: a drum kick, snare, or hand clap "
+                                    + "(very short, sharp attack)."
+                                color: cMuted; font.pixelSize: 9; wrapMode: Text.WordWrap
+                                width: parent.width
+                                leftPadding: 28
+                            }
                         }
-                        Row { spacing: 8
-                            Rectangle { width: 16; height: 8; radius: 2
-                                color: "#7878A0"  // GRAY
-                                anchors.verticalCenter: parent.verticalCenter }
-                            Text { text: "Break — silence > 200ms"
-                                color: cText; font.pixelSize: 11
-                                anchors.verticalCenter: parent.verticalCenter }
+
+                        // BREAK
+                        Column { spacing: 3; width: parent.width
+                            Row { spacing: 8
+                                Rectangle { width: 20; height: 10; radius: 2
+                                    color: "#7878A0" }
+                                Text { text: "⚫ BREAK (GRAY)"
+                                    color: cText; font.pixelSize: 11; font.bold: true
+                                    anchors.verticalCenter: parent.verticalCenter }
+                            }
+                            Text {
+                                text: "Silence or quiet space between sounds. "
+                                    + "Example: the pause between two words "
+                                    + "(helps separate different parts)."
+                                color: cMuted; font.pixelSize: 9; wrapMode: Text.WordWrap
+                                width: parent.width
+                                leftPadding: 28
+                            }
                         }
-                        Row { spacing: 8
-                            Rectangle { width: 16; height: 8; radius: 2
-                                color: "#F1C40F"  // YELLOW
-                                anchors.verticalCenter: parent.verticalCenter }
-                            Text { text: "Core — essence of phrase (highlight)"
-                                color: cText; font.pixelSize: 11
-                                anchors.verticalCenter: parent.verticalCenter }
+
+                        // CORE
+                        Column { spacing: 3; width: parent.width
+                            Row { spacing: 8
+                                Rectangle { width: 20; height: 10; radius: 2
+                                    color: "#F1C40F" }
+                                Text { text: "⭐ CORE (YELLOW)"
+                                    color: cText; font.pixelSize: 11; font.bold: true
+                                    anchors.verticalCenter: parent.verticalCenter }
+                            }
+                            Text {
+                                text: "The \"heart\" of a phrase — the most "
+                                    + "important 0.5–2 seconds. This is the "
+                                    + "most energetic or interesting part you'd "
+                                    + "want to loop or isolate."
+                                color: cMuted; font.pixelSize: 9; wrapMode: Text.WordWrap
+                                width: parent.width
+                                leftPadding: 28
+                            }
                         }
+                    }
+
+                    Rectangle { width: parent.width; height: 1; color: cBorder }
+
+                    // Example scenario
+                    Text { text: "Example: \"On the Corner\""; color: cText
+                        font.pixelSize: 12; font.bold: true }
+                    Text {
+                        text: "If you load a vocal sample that says "
+                            + "\"I am ready... on the corner... I am drinking\", "
+                            + "the AI detects:"
+                        color: cMuted; font.pixelSize: 10
+                        wrapMode: Text.WordWrap; width: parent.width
+                    }
+
+                    Column {
+                        width: parent.width; spacing: 3
+
+                        Row { spacing: 6
+                            Rectangle { width: 12; height: 6; radius: 1; color: "#3D8EF0" }
+                            Text { text: "\"I am ready\" (BLUE PHRASE)"
+                                color: cText; font.pixelSize: 10 }
+                        }
+                        Row { spacing: 6
+                            Rectangle { width: 12; height: 6; radius: 1; color: "#F1C40F" }
+                            Text { text: "Its core part highlighted (YELLOW)"
+                                color: cText; font.pixelSize: 10 }
+                        }
+                        Row { spacing: 6
+                            Rectangle { width: 12; height: 6; radius: 1; color: "#E74C3C" }
+                            Text { text: "\"on the corner\" (RED HIT — sharp)"
+                                color: cText; font.pixelSize: 10 }
+                        }
+                        Row { spacing: 6
+                            Rectangle { width: 12; height: 6; radius: 1; color: "#3D8EF0" }
+                            Text { text: "\"I am drinking\" (BLUE PHRASE)"
+                                color: cText; font.pixelSize: 10 }
+                        }
+                    }
+
+                    Text {
+                        text: "You can then assign each colored section to different pads "
+                            + "and layer them, or just use the CORE part as a loop."
+                        color: cMuted; font.pixelSize: 9; wrapMode: Text.WordWrap
+                        width: parent.width
                     }
                 }
 

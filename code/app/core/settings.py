@@ -155,6 +155,8 @@ class AppSettings:
     pad_layout: PadLayoutSettings  = field(default_factory=PadLayoutSettings)
     playback:   PlaybackSettings   = field(default_factory=PlaybackSettings)
 
+    # NEW: User-chosen output folder for stems & samples. Empty = use cache_dir.
+    stems_output_dir: str = ""
     # ---- Derived helpers ----------------------------------------------
 
     @property
@@ -202,6 +204,7 @@ class AppSettings:
                 slicing=SlicingSettings(**raw.get("slicing", {})),
                 pad_layout=PadLayoutSettings(**raw.get("pad_layout", {})),
                 playback=PlaybackSettings(**raw.get("playback", {})),
+                stems_output_dir=raw.get("stems_output_dir", ""),
             )
         except Exception as e:
             log.warning("Failed to load settings (%s), using defaults", e)
