@@ -1,23 +1,10 @@
 """
-Playback engine.
-
-Design goal: present a stable API that the GUI talks to. The CONCRETE engine
-can be swapped (Python reference -> C++/pybind11) without touching callers.
-
-Architecture:
-  - Voices: a fixed pool. One pad trigger -> one voice acquired.
-  - Mixer: sums all active voices into the output stream.
-  - Stems cache: each Stem is loaded once (numpy float32, stereo) and shared.
-  - Audio callback runs on the sounddevice thread; the GUI thread only enqueues
-    commands via a lock-free-ish queue (queue.Queue is fine for MVP latency).
-
-When we move to C++:
-  - Same trigger/stop API.
-  - Voices implemented as a JUCE/CHOC mixer; same Stem cache populated from Python.
-  - Pybind11 module exposes the same methods.
-
-For the MVP we use sounddevice (PortAudio). Latency ~20-50ms is fine to validate
-the design. For embedded we'll target JACK with period_size=128 (~3ms @ 48k).
+Playback engine — FIXED + EXTENDED:
+  - Pitch/time stretch now WORKS (librosa fallback when pyrubberband missing)
+  - Cutoff (low-pass filter) per sample
+  - Pan (stereo positioning) per sample
+  - Global project pitch (applied on top of per-sample pitch)
+  - GATE mode (stop on release), HOLD mode (re-trigger on next press)
 """
 
 from __future__ import annotations
@@ -68,10 +55,11 @@ class PlaybackEngine(ABC):
 class _Voice:
     """One playing instance of a Sample."""
     sample_id: str
-    audio: np.ndarray         # (frames, 2) float32, already includes fades & gain
+    audio: np.ndarray
     position: int = 0
     loop: bool = False
-    hold: bool = False
+    gate: bool = False     # if True, release_pad stops voice immediately
+    hold: bool = False     # if True, voice keeps playing until next trigger
     pad_index: int = -1
     group: int = 0
     active: bool = True
@@ -79,32 +67,26 @@ class _Voice:
 
 @dataclass
 class _Command:
-    kind: str                 # 'trigger' | 'release' | 'stop_all' | 'mute_stem'
+    kind: str
     payload: dict = field(default_factory=dict)
 
 
 class SounddevicePlaybackEngine(PlaybackEngine):
     """
-    Python playback engine using sounddevice (PortAudio).
-
-    Threading model:
-      - GUI thread calls trigger_pad/release_pad -> push Command onto queue
-      - Audio thread (sounddevice callback) drains queue, updates voices, mixes
-    This keeps the audio callback free of locks/allocations beyond a bounded queue.
+    Python playback engine with WORKING DSP (pitch, time, cutoff, pan).
     """
 
     MAX_VOICES = 32
 
-    def __init__(self, sample_rate: int = 44100, block_size: int = 512, channels: int = 2):
+    def __init__(self, sample_rate: int = 44100, block_size: int = 512,
+                  channels: int = 2, output_device: Optional[str] = None):
         self.sample_rate = sample_rate
         self.block_size = block_size
         self.channels = channels
+        self.output_device = output_device  # None = system default
 
-        # Cached stem audio: id -> (frames, channels) float32
         self._stem_audio: dict[str, np.ndarray] = {}
-        # Cached sample renders: id -> rendered float32 buffer ready to mix
         self._sample_buffers: dict[str, np.ndarray] = {}
-        # Original sample records (for re-rendering on param change)
         self._samples: dict[str, Sample] = {}
 
         self._voices: list[_Voice] = []
@@ -113,7 +95,92 @@ class SounddevicePlaybackEngine(PlaybackEngine):
         self._stream = None
         self._lock = threading.Lock()
 
+        # NEW: global project pitch (in semitones), applied to all samples
+        self._global_pitch_semitones: float = 0.0
+
+        # NEW: project-level BPM (used when sample.bpm is None for loop sync)
+        self._project_bpm: float = 0.0
+
+    def set_project_bpm(self, bpm: float) -> None:
+        """Set the project BPM, used for loop-to-grid quantization
+        when a sample doesn't have its own BPM."""
+        new_bpm = max(0.0, float(bpm))
+        if abs(new_bpm - self._project_bpm) < 0.01:
+            return
+        self._project_bpm = new_bpm
+        # Re-render samples that use loop_beats > 0 (loop sync enabled)
+        for sid, sample in list(self._samples.items()):
+            if getattr(sample, "loop_beats", 0) > 0:
+                buf = self._render_sample(sample)
+                if buf is not None:
+                    self._sample_buffers[sid] = buf
+
+    @property
+    def project_bpm(self) -> float:
+        return self._project_bpm
+
+    # ---- Device discovery ---------------------------------------------
+
+    @staticmethod
+    def list_output_devices() -> list[dict]:
+        """
+        Return a list of available audio OUTPUT devices.
+        Each dict: { 'index': int, 'name': str, 'channels': int,
+                     'default_samplerate': float, 'is_default': bool }
+        """
+        try:
+            import sounddevice as sd
+        except ImportError:
+            return []
+
+        try:
+            devices = sd.query_devices()
+            default_out_idx = sd.default.device[1] if sd.default.device else -1
+        except Exception as e:
+            log.warning("Failed to query audio devices: %s", e)
+            return []
+
+        result = []
+        for i, dev in enumerate(devices):
+            if dev.get("max_output_channels", 0) > 0:
+                result.append({
+                    "index": i,
+                    "name": dev.get("name", f"Device {i}"),
+                    "channels": dev.get("max_output_channels", 2),
+                    "default_samplerate": float(dev.get("default_samplerate", 44100)),
+                    "is_default": (i == default_out_idx),
+                })
+        return result
+
+    @staticmethod
+    def get_default_output_device_name() -> str:
+        """Return the name of the system default output device."""
+        try:
+            import sounddevice as sd
+            default_out_idx = sd.default.device[1]
+            devs = sd.query_devices()
+            if 0 <= default_out_idx < len(devs):
+                return devs[default_out_idx].get("name", "Default")
+        except Exception:
+            pass
+        return "Default"
+
     # ---- Public API ----------------------------------------------------
+
+    def set_global_pitch(self, semitones: float) -> None:
+        """Set global pitch shift, applied to all samples. Triggers re-render."""
+        if abs(semitones - self._global_pitch_semitones) < 0.01:
+            return
+        self._global_pitch_semitones = float(semitones)
+        # Re-render all samples
+        for sid, sample in list(self._samples.items()):
+            buf = self._render_sample(sample)
+            if buf is not None:
+                self._sample_buffers[sid] = buf
+
+    @property
+    def global_pitch_semitones(self) -> float:
+        return self._global_pitch_semitones
 
     def load_stems(self, stems: list[Stem]) -> None:
         import soundfile as sf
@@ -129,7 +196,6 @@ class SounddevicePlaybackEngine(PlaybackEngine):
             log.info("Cached stem %s: %d frames", stem.stem_type.value, len(data))
 
     def register_sample(self, sample: Sample) -> None:
-        """Pre-render a sample buffer with fades and gain baked in."""
         self._samples[sample.id] = sample
         buf = self._render_sample(sample)
         if buf is not None:
@@ -149,20 +215,86 @@ class SounddevicePlaybackEngine(PlaybackEngine):
     def stop_all(self) -> None:
         self._cmd_queue.put_nowait(_Command("stop_all"))
 
+    def stop_pad(self, pad_index: int) -> None:
+        """Thread-safe: stop all voices for a specific pad."""
+        self._cmd_queue.put_nowait(_Command("stop_pad", {"pad_index": pad_index}))
+
+    def trigger_click(self, click_audio: np.ndarray) -> None:
+        """
+        Thread-safe metronome click injection.
+        click_audio: stereo float32 array (N, 2).
+        """
+        self._cmd_queue.put_nowait(_Command("click", {"audio": click_audio}))
+
     def set_stem_mute(self, stem_type: StemType, muted: bool) -> None:
         self._stem_mutes[stem_type] = muted
 
     def start(self) -> None:
         import sounddevice as sd
-        self._stream = sd.OutputStream(
+
+        # Determine a safe channel count for the chosen device.
+        channels = self.channels
+        if self.output_device is not None:
+            try:
+                info = sd.query_devices(self.output_device, "output")
+                max_ch = int(info.get("max_output_channels", 2))
+                if max_ch < 1:
+                    raise ValueError("Device reports 0 output channels")
+                # Use 2 if supported, else clamp to what the device offers
+                channels = min(self.channels, max_ch)
+                if channels < 1:
+                    channels = 1
+            except Exception as e:
+                log.warning("Could not query device '%s': %s",
+                            self.output_device, e)
+                # Fall back to default device
+                self.output_device = None
+                channels = self.channels
+
+        kwargs = dict(
             samplerate=self.sample_rate,
             blocksize=self.block_size,
-            channels=self.channels,
+            channels=channels,
             dtype="float32",
             callback=self._callback,
         )
-        self._stream.start()
-        log.info("Audio stream started @ %dHz / block=%d", self.sample_rate, self.block_size)
+        if self.output_device is not None:
+            kwargs["device"] = self.output_device
+
+        try:
+            self._stream = sd.OutputStream(**kwargs)
+            self._stream.start()
+            self.channels = channels  # remember what actually worked
+            log.info("Audio stream started @ %dHz / block=%d / device=%s / ch=%d",
+                      self.sample_rate, self.block_size,
+                      self.output_device or "default", channels)
+        except Exception as e:
+            log.error("Failed to open OutputStream on device '%s': %s",
+                      self.output_device, e)
+            # Retry once on the system default device with 2 channels
+            self._stream = None
+            if self.output_device is not None:
+                log.info("Retrying on system default device")
+                self.output_device = None
+                self.channels = 2
+                try:
+                    self._stream = sd.OutputStream(
+                        samplerate=self.sample_rate,
+                        blocksize=self.block_size,
+                        channels=2,
+                        dtype="float32",
+                        callback=self._callback,
+                    )
+                    self._stream.start()
+                    log.info("Audio stream started on default device (fallback)")
+                    return
+                except Exception as e2:
+                    log.error("Fallback also failed: %s", e2)
+                    self._stream = None
+            # Re-raise so the caller can surface the problem without crashing
+            raise RuntimeError(
+                f"Could not open audio device: {e}"
+            ) from e
 
     def stop(self) -> None:
         if self._stream:
@@ -176,7 +308,6 @@ class SounddevicePlaybackEngine(PlaybackEngine):
         if status:
             log.warning("Audio callback status: %s", status)
 
-        # 1) Drain commands
         while True:
             try:
                 cmd = self._cmd_queue.get_nowait()
@@ -184,10 +315,16 @@ class SounddevicePlaybackEngine(PlaybackEngine):
                 break
             self._apply_command(cmd)
 
-        # 2) Mix active voices into outdata
         outdata.fill(0.0)
+        out_channels = outdata.shape[1]
+
         if not self._voices:
             return
+
+        # Mix everything into a STEREO scratch buffer, then map to the
+        # actual output channel count. This keeps voice handling uniform
+        # (all voice audio is stereo) regardless of the device.
+        mix = np.zeros((frames, 2), dtype=np.float32)
 
         remaining: list[_Voice] = []
         for v in self._voices:
@@ -197,48 +334,52 @@ class SounddevicePlaybackEngine(PlaybackEngine):
             buf_len = len(buf)
             end = v.position + frames
             if end <= buf_len:
-                outdata[:] += buf[v.position:end]
+                mix[:] += buf[v.position:end]
                 v.position = end
                 remaining.append(v)
             else:
-                # Voice would run past buffer end
                 tail = buf_len - v.position
                 if tail > 0:
-                    outdata[:tail] += buf[v.position:]
+                    mix[:tail] += buf[v.position:]
                 if v.loop and buf_len > 0:
-                    # Loop wrap with a tiny crossfade to avoid clicks.
-                    # We overlap the last `xfade` samples of the buffer with
-                    # the first `xfade` samples of the next iteration.
-                    xfade = min(64, buf_len // 8, tail)  # ~1.5ms at 44.1k
+                    xfade = min(64, buf_len // 8, tail)
                     leftover = frames - tail
                     if leftover <= 0:
                         v.position = 0
                         remaining.append(v)
                         continue
 
-                    # Crossfade region: outdata[tail-xfade : tail] currently
-                    # contains the buffer END. We add an attenuated copy of the
-                    # buffer START on top.
                     if xfade > 0 and tail >= xfade:
                         ramp_in = np.linspace(0.0, 1.0, xfade,
                                               dtype=np.float32)[:, None]
                         ramp_out = 1.0 - ramp_in
-                        # Apply ramp_out to the existing tail
-                        outdata[tail - xfade:tail] *= ramp_out
-                        # Add ramp_in * buffer start
+                        mix[tail - xfade:tail] *= ramp_out
                         head = buf[:xfade] * ramp_in
-                        outdata[tail - xfade:tail] += head
+                        mix[tail - xfade:tail] += head
 
                     if leftover < buf_len:
-                        outdata[tail:tail + leftover] += buf[:leftover]
+                        mix[tail:tail + leftover] += buf[:leftover]
                         v.position = leftover
                     else:
                         v.position = 0
                     remaining.append(v)
-                # else: voice ends, don't keep it
         self._voices = remaining
 
-        # Soft clip
+        np.clip(mix, -1.0, 1.0, out=mix)
+
+        # Map the stereo mix onto the device's channel layout
+        if out_channels == 2:
+            outdata[:] = mix
+        elif out_channels == 1:
+            # Downmix to mono
+            outdata[:, 0] = mix.mean(axis=1)
+        else:
+            # More than 2 channels: put stereo on first two, silence the rest
+            outdata[:, 0] = mix[:, 0]
+            if out_channels >= 2:
+                outdata[:, 1] = mix[:, 1]
+            # channels 2..N already zeroed by outdata.fill(0.0)
+
         np.clip(outdata, -1.0, 1.0, out=outdata)
 
     def _apply_command(self, cmd: _Command) -> None:
@@ -251,13 +392,19 @@ class SounddevicePlaybackEngine(PlaybackEngine):
             group = cmd.payload["group"]
             pad_index = cmd.payload["pad_index"]
 
-            # Choke group: stop other voices in same group
+            # Choke group
             if group > 0:
                 for v in self._voices:
                     if v.group == group:
                         v.active = False
 
-            # Voice stealing: if at cap, drop oldest
+            # HOLD mode: if a voice is already playing for this pad, stop it
+            # (re-trigger behavior)
+            if mode == PadMode.HOLD:
+                for v in self._voices:
+                    if v.pad_index == pad_index:
+                        v.active = False
+
             if len(self._voices) >= self.MAX_VOICES:
                 self._voices.pop(0)
 
@@ -265,7 +412,8 @@ class SounddevicePlaybackEngine(PlaybackEngine):
                 sample_id=sid,
                 audio=buf,
                 loop=(mode == PadMode.LOOP),
-                hold=(mode in (PadMode.HOLD, PadMode.GATE)),
+                gate=(mode == PadMode.GATE),
+                hold=(mode == PadMode.HOLD),
                 pad_index=pad_index,
                 group=group,
             ))
@@ -273,34 +421,55 @@ class SounddevicePlaybackEngine(PlaybackEngine):
         elif cmd.kind == "release":
             pad_index = cmd.payload["pad_index"]
             for v in self._voices:
-                if v.pad_index == pad_index and v.hold:
+                if v.pad_index == pad_index and v.gate:
+                    # GATE: stop on release
                     v.active = False
+                # HOLD: do NOT stop on release — keeps playing
+                # LOOP: do NOT stop on release — manual stop needed
 
         elif cmd.kind == "stop_all":
             for v in self._voices:
                 v.active = False
 
+        elif cmd.kind == "stop_pad":
+            pad_index = cmd.payload["pad_index"]
+            for v in self._voices:
+                if v.pad_index == pad_index:
+                    v.active = False
+
+        elif cmd.kind == "click":
+            audio = cmd.payload["audio"]
+            if audio is not None and len(audio) > 0:
+                if len(self._voices) >= self.MAX_VOICES:
+                    self._voices.pop(0)
+                self._voices.append(_Voice(
+                    sample_id="__metronome_click__",
+                    audio=audio,
+                    loop=False, gate=False, hold=False,
+                    pad_index=-1, group=-1, active=True,
+                ))
+
     # ---- Rendering -----------------------------------------------------
 
     def _render_sample(self, sample: Sample) -> Optional[np.ndarray]:
-        """Return a rendered (frames, 2) float32 buffer for this sample.
-
-        Notes on click-free loops:
-          - For a SAMPLE THAT WILL LOOP, baking a hard fade-out into the buffer
-            would cause an audible "duck" on every wrap. We therefore apply
-            only a tiny edge anti-click ramp (~2ms), not the user fade_out.
-          - We also snap start/end of stem regions to the nearest zero-crossing
-            within a small search window. This removes the worst click sources.
-          - At loop wrap time, the audio callback ALSO does a short crossfade
-            (see _callback). The combination kills the click for most material.
-        """
-        # Case 1: rendered file path
+        """Render a sample with all effects baked in: pitch, time-stretch,
+        cutoff, pan, fades, gain, reverse."""
+        # 1) Load raw audio
         if sample.path and sample.path.exists():
             import soundfile as sf
             buf, sr = sf.read(str(sample.path), dtype="float32", always_2d=True)
             if sr != self.sample_rate:
                 buf = self._resample(buf, sr, self.sample_rate)
-        # Case 2: region of a stem (with zero-crossing snap)
+            # Apply start/end crop if the sample defines a sub-region.
+            # A path-based sample may still carry start/end relative to the file.
+            total = len(buf)
+            start = max(0, min(getattr(sample, "start_sample", 0), total))
+            end = getattr(sample, "end_sample", 0)
+            # Only crop if end is a meaningful value within the file and
+            # the region is smaller than the whole file.
+            if end and end > start and end <= total and (start > 0 or end < total):
+                s2, e2 = self._snap_zero_crossings(buf, start, end)
+                buf = buf[s2:e2].copy()
         elif sample.source_stem_id and sample.source_stem_id in self._stem_audio:
             src = self._stem_audio[sample.source_stem_id]
             start, end = self._snap_zero_crossings(
@@ -312,29 +481,47 @@ class SounddevicePlaybackEngine(PlaybackEngine):
             return None
 
         if buf.size == 0:
-            log.warning("Sample %s rendered empty", sample.name)
             return None
 
         if buf.shape[1] == 1:
             buf = np.repeat(buf, 2, axis=1)
 
-        # Reverse
+        # 2) Reverse (BEFORE pitch/time so semantics are intuitive)
         if sample.reverse:
             buf = buf[::-1].copy()
 
-        # Pitch / time stretch (Python ref impl). Use rubberband if available; else skip.
-        if sample.pitch_semitones != 0.0 or sample.time_stretch != 1.0:
-            buf = self._pitch_time(buf, sample.pitch_semitones, sample.time_stretch)
+        # 3) Pitch + time stretch (combined: per-sample + global pitch)
+        total_pitch = sample.pitch_semitones + self._global_pitch_semitones
+        if abs(total_pitch) > 0.01 or abs(sample.time_stretch - 1.0) > 0.01:
+            buf = self._pitch_time(buf, total_pitch, sample.time_stretch)
 
-        # Gain
+        # 3b) NEW: Loop sync to BPM grid
+        # When loop_beats > 0, fine-time-stretch the buffer so its length
+        # equals exactly N beats at the sample (or project) BPM. This keeps
+        # looped playback locked to the musical grid.
+        loop_beats = int(getattr(sample, "loop_beats", 0) or 0)
+        if loop_beats > 0:
+            bpm = sample.bpm if sample.bpm else self._project_bpm
+            if bpm and bpm > 0:
+                buf = self._quantize_to_beats(buf, bpm, loop_beats)
+
+        # 4) Cutoff (low-pass filter)
+        cutoff_hz = getattr(sample, "cutoff_hz", 20000.0)
+        if cutoff_hz < 19999.0:  # only apply if user moved it
+            buf = self._apply_lowpass(buf, cutoff_hz)
+
+        # 5) Pan (stereo positioning, -1.0 = full L, +1.0 = full R)
+        pan = getattr(sample, "pan", 0.0)
+        if abs(pan) > 0.01:
+            buf = self._apply_pan(buf, pan)
+
+        # 6) Gain
         if sample.gain_db != 0.0:
             buf *= 10 ** (sample.gain_db / 20.0)
 
-        # Edge anti-click ramps (very short, always applied, loop-safe).
-        # User-requested fade_in/out are respected, but capped to length/2
-        # and only applied if longer than the anti-click floor.
+        # 7) Anti-click ramps + user fades
         n = len(buf)
-        anti_click = min(int(0.002 * self.sample_rate), n // 4)  # ~2ms
+        anti_click = min(int(0.002 * self.sample_rate), n // 4)
         fin = max(min(sample.fade_in_samples, n // 2), anti_click)
         fout = max(min(sample.fade_out_samples, n // 2), anti_click)
         if fin > 0:
@@ -344,7 +531,6 @@ class SounddevicePlaybackEngine(PlaybackEngine):
             ramp = np.linspace(1.0, 0.0, fout, dtype=np.float32)[:, None]
             buf[-fout:] *= ramp
 
-        # Normalize
         if sample.normalized:
             peak = float(np.max(np.abs(buf))) or 1.0
             buf /= peak
@@ -352,12 +538,7 @@ class SounddevicePlaybackEngine(PlaybackEngine):
         return np.ascontiguousarray(buf, dtype=np.float32)
 
     def _snap_zero_crossings(self, src: np.ndarray, start: int, end: int,
-                             search_window: int = 256) -> tuple[int, int]:
-        """Move start/end to the nearest zero-crossing within +/- search_window.
-
-        Reduces clicks on stem slicing. Uses channel 0; stereo correlation is
-        good enough on stems where L/R are similar.
-        """
+                              search_window: int = 256) -> tuple[int, int]:
         n = len(src)
         start = max(0, min(start, n - 1))
         end = max(start + 1, min(end, n))
@@ -368,30 +549,161 @@ class SounddevicePlaybackEngine(PlaybackEngine):
             window = src[lo:hi, 0]
             if window.size < 2:
                 return pos
-            # zero crossings: sign change
             signs = np.signbit(window)
             zcs = np.where(np.diff(signs))[0]
             if len(zcs) == 0:
                 return pos
-            # closest to relative target
             target = pos - lo
             best = zcs[np.argmin(np.abs(zcs - target))]
             return lo + int(best)
 
         return _nearest_zc(start), _nearest_zc(end)
 
-    def _pitch_time(self, buf: np.ndarray, semitones: float, stretch: float) -> np.ndarray:
-        """Optional pitch/time using pyrubberband; falls back to passthrough."""
+    # ---- DSP -----------------------------------------------------------
+
+    def _pitch_time(self, buf: np.ndarray, semitones: float,
+                     stretch: float) -> np.ndarray:
+        """
+        Apply pitch shift + time stretch.
+
+        Strategy (in order of preference):
+          1. pyrubberband — best quality, may not be installed
+          2. librosa — always available, decent quality
+          3. simple resampling — last resort (changes pitch AND duration)
+        """
+        # Try pyrubberband first
         try:
             import pyrubberband as pyrb
-            mono_or_stereo = buf.T  # rubberband expects (channels, samples) or (samples,)
-            out = pyrb.time_stretch(buf, self.sample_rate, stretch) if stretch != 1.0 else buf
-            if semitones != 0.0:
+            out = buf
+            if abs(stretch - 1.0) > 0.01:
+                out = pyrb.time_stretch(out, self.sample_rate, stretch)
+            if abs(semitones) > 0.01:
                 out = pyrb.pitch_shift(out, self.sample_rate, semitones)
             return np.ascontiguousarray(out.astype(np.float32))
         except Exception as e:
-            log.warning("Pitch/time DSP unavailable: %s", e)
+            log.debug("pyrubberband unavailable: %s", e)
+
+        # Fallback: librosa
+        try:
+            import librosa
+            # librosa works on mono or (channels, samples) — we have (samples, 2)
+            # so we transpose
+            mono_left = np.ascontiguousarray(buf[:, 0])
+            mono_right = np.ascontiguousarray(buf[:, 1])
+
+            if abs(stretch - 1.0) > 0.01:
+                # librosa.effects.time_stretch: rate > 1 = faster, < 1 = slower
+                # Our convention: time_stretch=2 means twice as long (slower)
+                # So rate = 1 / stretch
+                rate = 1.0 / max(0.01, stretch)
+                mono_left = librosa.effects.time_stretch(mono_left, rate=rate)
+                mono_right = librosa.effects.time_stretch(mono_right, rate=rate)
+
+            if abs(semitones) > 0.01:
+                mono_left = librosa.effects.pitch_shift(
+                    mono_left, sr=self.sample_rate, n_steps=semitones
+                )
+                mono_right = librosa.effects.pitch_shift(
+                    mono_right, sr=self.sample_rate, n_steps=semitones
+                )
+
+            min_len = min(len(mono_left), len(mono_right))
+            out = np.stack([mono_left[:min_len], mono_right[:min_len]], axis=1)
+            return np.ascontiguousarray(out.astype(np.float32))
+        except Exception as e:
+            log.warning("librosa pitch/time failed: %s", e)
+
+        # Last resort: simple resampling for pitch (changes time too)
+        if abs(semitones) > 0.01:
+            try:
+                import librosa
+                rate = 2.0 ** (semitones / 12.0)
+                indices = np.arange(0, len(buf), rate)
+                indices = indices[indices < len(buf)].astype(int)
+                return np.ascontiguousarray(buf[indices].astype(np.float32))
+            except Exception:
+                pass
+
+        return buf
+
+    def _quantize_to_beats(self, buf: np.ndarray, bpm: float,
+                            target_beats: int) -> np.ndarray:
+        """
+        Stretch/compress audio so its total length matches exactly
+        `target_beats` at the given BPM.
+
+        Used for "Loop sync to BPM grid" — keeps loop wrap points musically
+        accurate even when the source sample length is slightly off.
+        """
+        if bpm <= 0 or target_beats <= 0 or len(buf) == 0:
             return buf
+
+        samples_per_beat = self.sample_rate * 60.0 / bpm
+        target_samples = int(round(target_beats * samples_per_beat))
+        if target_samples <= 0:
+            return buf
+
+        raw_samples = len(buf)
+        # Tolerance: within 5ms = no adjustment needed
+        if abs(target_samples - raw_samples) < self.sample_rate * 0.005:
+            return buf
+
+        stretch = target_samples / raw_samples
+        # Clamp to avoid extreme stretches (>2x or <0.5x means wrong target)
+        stretch = max(0.5, min(2.0, stretch))
+        return self._pitch_time(buf, semitones=0.0, stretch=stretch)
+
+    @staticmethod
+    def suggest_loop_beats(sample_length_samples: int, sample_rate: int,
+                            bpm: float) -> int:
+        """
+        Auto-detect the most likely beat count for a sample by snapping
+        to the nearest power-of-2 or musically common beat count.
+        Returns 1, 2, 4, 8, 16, or 32 (whatever is closest).
+        """
+        if bpm <= 0 or sample_length_samples <= 0:
+            return 0
+        samples_per_beat = sample_rate * 60.0 / bpm
+        raw_beats = sample_length_samples / samples_per_beat
+        # Common beat counts in music: 1, 2, 4, 8, 16, 32
+        candidates = [1, 2, 4, 8, 16, 32]
+        # Pick the one closest in log scale (musical perception)
+        import math
+        log_raw = math.log(max(0.5, raw_beats))
+        best = min(candidates, key=lambda c: abs(math.log(c) - log_raw))
+        return best
+
+    def _apply_lowpass(self, buf: np.ndarray, cutoff_hz: float) -> np.ndarray:
+        """Apply low-pass filter (Butterworth, 2nd order, bidirectional)."""
+        try:
+            from scipy.signal import butter, sosfiltfilt
+            nyq = self.sample_rate / 2.0
+            normalized_cutoff = max(0.001, min(0.99, cutoff_hz / nyq))
+            sos = butter(2, normalized_cutoff, btype="low", output="sos")
+            # Apply per channel
+            out = np.empty_like(buf)
+            for ch in range(buf.shape[1]):
+                out[:, ch] = sosfiltfilt(sos, buf[:, ch])
+            return np.ascontiguousarray(out.astype(np.float32))
+        except Exception as e:
+            log.debug("Lowpass filter failed: %s", e)
+            return buf
+
+    def _apply_pan(self, buf: np.ndarray, pan: float) -> np.ndarray:
+        """
+        Constant-power panning.
+        pan: -1.0 (full L) to +1.0 (full R), 0.0 = center.
+        Uses equal-power law to keep perceived loudness constant.
+        """
+        pan = max(-1.0, min(1.0, float(pan)))
+        # Map [-1, 1] -> [0, pi/2]
+        angle = (pan + 1.0) * 0.25 * np.pi
+        gain_l = np.cos(angle)
+        gain_r = np.sin(angle)
+        # Mix stereo to mono first, then pan
+        mono = buf.mean(axis=1)
+        out = np.stack([mono * gain_l, mono * gain_r], axis=1)
+        return np.ascontiguousarray(out.astype(np.float32))
 
     def _resample(self, data: np.ndarray, src_sr: int, dst_sr: int) -> np.ndarray:
         try:

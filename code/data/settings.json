@@ -19,21 +19,22 @@
     "melody_phrase_bars": 4
   },
   "pad_layout": {
-    "pads_drum_hit": 4,
-    "pads_drum_loop": 4,
+    "pads_drum_hit": 6,
+    "pads_drum_loop": 2,
     "pads_vocal_chop": 4,
-    "pads_vocal_phrase": 8,
+    "pads_vocal_phrase": 4,
     "pads_melody": 4,
     "pads_bass_loop": 4,
-    "grid_size": 28
+    "grid_size": 24
   },
   "playback": {
     "sample_rate": 96000,
     "block_size": 2048,
     "press_hold_loop": true,
-    "auto_choke_drums": true,
+    "auto_choke_drums": false,
     "auto_normalize_stems": false,
-    "nr_level_pre": "light",
-    "nr_level_post": "light"
-  }
+    "nr_level_pre": "off",
+    "nr_level_post": "off"
+  },
+  "stems_output_dir": ""
 }

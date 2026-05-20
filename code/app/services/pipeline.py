@@ -50,6 +50,8 @@ class SamplerPipeline:
         self.cache_dir = cache_dir
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         self.settings = settings or AppSettings()
+        # NEW: User-chosen output dir overrides cache_dir for stems
+        self.output_dir = self._resolve_output_dir()
         self.separator = separator or DemucsSeparator(
             model_name=self.settings.demucs_model
         )
@@ -58,6 +60,33 @@ class SamplerPipeline:
         self.assigner = assigner or PadAssigner(
             layout=self.settings.pad_layout
         )
+
+    def _resolve_output_dir(self) -> Path:
+        """Return user's chosen output dir, or fall back to cache_dir."""
+        from pathlib import Path
+        user_dir = (self.settings.stems_output_dir or "").strip()
+        if user_dir:
+            p = Path(user_dir)
+            try:
+                p.mkdir(parents=True, exist_ok=True)
+                return p
+            except Exception as e:
+                import logging
+                logging.getLogger(__name__).warning(
+                    "Cannot use user output dir %s (%s), falling back to cache",
+                    p, e
+                )
+        return self.cache_dir
+
+    def _safe_folder_name(self, name: str) -> str:
+        """Make a string safe for use as a folder name (cross-platform)."""
+        import re
+        # Strip invalid chars: \ / : * ? " < > |
+        clean = re.sub(r'[\\/:*?"<>|]', "_", name)
+        clean = clean.strip().strip(".")
+        # Limit length to avoid filesystem issues
+        clean = clean[:80] if clean else "untitled"
+        return clean
 
     def import_track(
         self,
@@ -88,7 +117,7 @@ class SamplerPipeline:
             rep(0.05, f"Noise reduction (pre, {self.settings.nr_pre_profile})…")
             # Put cleaned mix in cache_dir, not /tmp, so it survives across runs
             # and doesn't break project save/load.
-            nr_dir = self.cache_dir / source.id
+            nr_dir = self.output_dir / self._safe_folder_name(audio_path.stem)
             nr_dir.mkdir(parents=True, exist_ok=True)
             tmp = nr_dir / f"_nr_pre_{audio_path.name}"
             try:
@@ -107,7 +136,8 @@ class SamplerPipeline:
 
         # 3) Stem separation
         rep(0.10, "Separating stems")
-        stem_dir = self.cache_dir / source.id
+        stem_dir = self.output_dir / self._safe_folder_name(audio_path.stem)
+        stem_dir.mkdir(parents=True, exist_ok=True)        
         try:
             stems = self.separator.separate(
                 source, stem_dir,
