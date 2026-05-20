@@ -37,6 +37,10 @@ from app.core.models import (
     AnalysisResult, Sample, SampleCategory, Stem, StemType, Transient,
 )
 
+from app.audio.slicing.sample_quality import (
+    QualityConfig, filter_samples,
+)
+
 log = logging.getLogger(__name__)
 
 
@@ -115,8 +119,46 @@ class AutoSlicer:
                     audio, zc_window, bpm,
                 ))
 
-        log.info("Auto-slicer produced %d samples", len(samples))
+        log.info("Auto-slicer produced %d raw samples", len(samples))
+
+        # Quality pass: drop silent/empty samples, trim dead air, flag
+        # quiet samples for normalization. Big boost to perceived quality.
+        samples = self._apply_quality_filter(samples, stems)
+
+        log.info("Auto-slicer final: %d samples after quality filter",
+                 len(samples))
         return samples
+
+    def _apply_quality_filter(self, samples: list[Sample],
+                              stems: list[Stem]) -> list[Sample]:
+        """Reject silent samples and trim/normalize the survivors."""
+        # Build a cache of mono stem audio + sample rates
+        stem_by_id = {s.id: s for s in stems}
+        audio_cache: dict[str, Optional[np.ndarray]] = {}
+
+        def load_audio(stem_id: str):
+            if stem_id not in audio_cache:
+                stem = stem_by_id.get(stem_id)
+                audio_cache[stem_id] = (
+                    self._load_stem_audio(stem) if stem else None
+                )
+            return audio_cache[stem_id]
+
+        def get_sr(stem_id: str) -> int:
+            stem = stem_by_id.get(stem_id)
+            return stem.sample_rate if stem else 44100
+
+        # Drum hits get attack-preserving treatment (don't trim the start)
+        drum_cats = {SampleCategory.DRUM_HIT}
+
+        kept, rejected = filter_samples(
+            samples,
+            stem_audio_loader=load_audio,
+            sample_rate_getter=get_sr,
+            cfg=QualityConfig(),
+            drum_categories=drum_cats,
+        )
+        return kept
 
     # ---- Drums ---------------------------------------------------------
 
