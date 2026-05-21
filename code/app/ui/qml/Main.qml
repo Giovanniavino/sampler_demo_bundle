@@ -24,8 +24,13 @@ ApplicationWindow {
 
     property bool showSettings: false
     property bool showSampleEdit: false
+    property bool showBrowser: false
     // 0=Slicing 1=PadLayout 2=Playback 3=MIDI/Analysis 4=Info
     property int  settingsTab: 0
+    // Browser: 0 = Stem mode, 1 = File mode
+    property int  browserMode: 0
+    // Which pad the browser will assign to (-1 = ask)
+    property int  browserTargetPad: 0
 
     FileDialog {
         id: fileDialog
@@ -37,6 +42,13 @@ ApplicationWindow {
         id: stemsFolderDialog
         title: "Choose folder for stems & samples"
         onAccepted: controller.setStemsOutputDir(selectedFolder.toString())
+    }
+
+    FileDialog {
+        id: sampleFileDialog
+        nameFilters: ["Audio (*.mp3 *.wav *.flac *.ogg *.m4a)"]
+        onAccepted: controller.loadSampleFromFile(
+            selectedFile.toString(), browserTargetPad)
     }
 
     // ════════════════════════════════════════════════════════════════
@@ -165,7 +177,24 @@ ApplicationWindow {
                     MouseArea { id: setM; anchors.fill: parent
                         hoverEnabled: true
                         onClicked: { showSettings = !showSettings
-                            showSampleEdit = false } }
+                            showSampleEdit = false; showBrowser = false } }
+                }
+                Rectangle {
+                    width: 70; height: 24; radius: 4
+                    color: showBrowser ? cAccent
+                        : (browM.containsMouse ? cCard : cCard)
+                    border.color: cBorder
+                    Text { anchors.centerIn: parent; text: "🗂 Browser"
+                        color: cText; font.pixelSize: 10; font.bold: true }
+                    MouseArea { id: browM; anchors.fill: parent
+                        hoverEnabled: true
+                        onClicked: {
+                            showBrowser = !showBrowser
+                            showSettings = false
+                            showSampleEdit = false
+                            if (showBrowser) controller.openStemBrowser()
+                        }
+                    }
                 }
                 Rectangle {
                     width: 56; height: 24; radius: 12
@@ -405,7 +434,7 @@ ApplicationWindow {
         anchors.top: topBar.bottom
         width: parent.width; height: 150
         color: cPanel
-        visible: !showSettings && !showSampleEdit
+        visible: !showSettings && !showSampleEdit && !showBrowser
 
         Row {
             id: edHeader
@@ -856,7 +885,7 @@ ApplicationWindow {
         anchors.bottom: bottomBar.top
         anchors.left: parent.left; anchors.right: parent.right
         anchors.margins: 4
-        visible: !showSettings && !showSampleEdit
+        visible: !showSettings && !showSampleEdit && !showBrowser
 
         property int cols: controller.gridSize <= 16 ? 4
                             : (controller.gridSize <= 25 ? 5 : 6)
@@ -1343,6 +1372,431 @@ ApplicationWindow {
             }
         }
     }
+
+    // ════════════════════════════════════════════════════════════════
+    // STEM BROWSER SCREEN — manual sample creation (Scenario A + B)
+    // ════════════════════════════════════════════════════════════════
+    Rectangle {
+        id: browserScreen
+        anchors.top: topBar.bottom
+        anchors.bottom: bottomBar.top
+        anchors.left: parent.left; anchors.right: parent.right
+        color: cBg; visible: showBrowser; z: 8
+
+        // Keyboard controls (simulate physical rotary/buttons)
+        Item {
+            anchors.fill: parent
+            focus: showBrowser
+            Keys.onPressed: function(event) {
+                if (event.isAutoRepeat && event.key !== Qt.Key_Left
+                    && event.key !== Qt.Key_Right) return
+                var sr_step = 0.05  // 50ms per arrow press
+                if (event.modifiers & Qt.ShiftModifier) sr_step = 0.5
+                switch (event.key) {
+                    case Qt.Key_Left:
+                        controller.nudgeBrowserMarker(-sr_step)
+                        event.accepted = true; break
+                    case Qt.Key_Right:
+                        controller.nudgeBrowserMarker(sr_step)
+                        event.accepted = true; break
+                    case Qt.Key_Tab:
+                        controller.toggleBrowserActiveMarker()
+                        event.accepted = true; break
+                    case Qt.Key_Space:
+                        controller.previewBrowserSelection()
+                        event.accepted = true; break
+                    case Qt.Key_Return:
+                    case Qt.Key_Enter:
+                        controller.assignBrowserSelectionToPad(browserTargetPad)
+                        event.accepted = true; break
+                    case Qt.Key_Escape:
+                        showBrowser = false
+                        event.accepted = true; break
+                }
+            }
+        }
+
+        // ─── Header: tabs + close ───
+        Item {
+            id: browserHeader
+            anchors.top: parent.top
+            anchors.left: parent.left; anchors.right: parent.right
+            anchors.margins: 8
+            height: 30
+
+            Row {
+                anchors.left: parent.left
+                anchors.verticalCenter: parent.verticalCenter
+                spacing: 6
+                Text { text: "🗂 BROWSER"; color: cText
+                    font.pixelSize: 15; font.bold: true
+                    anchors.verticalCenter: parent.verticalCenter }
+                MiniBtn {
+                    label: "Stem"
+                    selected: browserMode === 0
+                    selColor: cAccent
+                    anchors.verticalCenter: parent.verticalCenter
+                    onClicked: browserMode = 0
+                }
+                MiniBtn {
+                    label: "File"
+                    selected: browserMode === 1
+                    selColor: cAccent
+                    anchors.verticalCenter: parent.verticalCenter
+                    onClicked: browserMode = 1
+                }
+            }
+            MiniBtn {
+                anchors.right: parent.right
+                anchors.verticalCenter: parent.verticalCenter
+                label: "Close ✕"; selColor: cBorder
+                onClicked: showBrowser = false
+            }
+        }
+
+        // ═══ STEM MODE (Scenario B) ═══
+        Item {
+            visible: browserMode === 0
+            anchors.top: browserHeader.bottom
+            anchors.bottom: parent.bottom
+            anchors.left: parent.left; anchors.right: parent.right
+            anchors.margins: 8
+
+            // Left: stem list
+            Rectangle {
+                id: stemList
+                anchors.left: parent.left
+                anchors.top: parent.top
+                anchors.bottom: parent.bottom
+                width: 150
+                color: cPanel; radius: 6
+                border.color: cBorder
+
+                Column {
+                    anchors.fill: parent
+                    anchors.margins: 6
+                    spacing: 4
+
+                    Text { text: "STEMS"; color: cMuted
+                        font.pixelSize: 10; font.bold: true }
+
+                    Repeater {
+                        model: controller.stemBrowserModel
+                        delegate: Rectangle {
+                            width: parent.width - 0; height: 40; radius: 5
+                            color: model.isSelected ? model.color : cCard
+                            opacity: model.isSelected ? 1.0 : 0.7
+                            border.color: model.isSelected ? "white" : cBorder
+                            Column {
+                                anchors.left: parent.left
+                                anchors.verticalCenter: parent.verticalCenter
+                                anchors.leftMargin: 8
+                                spacing: 1
+                                Text { text: model.displayName
+                                    color: model.isSelected ? "white" : cText
+                                    font.pixelSize: 12; font.bold: true }
+                                Text { text: model.durationSec.toFixed(1) + "s"
+                                    color: model.isSelected ? "#FFFFFFCC" : cMuted
+                                    font.pixelSize: 9 }
+                            }
+                            MouseArea { anchors.fill: parent
+                                onClicked: controller.selectBrowserStem(index) }
+                        }
+                    }
+                }
+            }
+
+            // Right: waveform + selection + actions
+            Rectangle {
+                anchors.left: stemList.right
+                anchors.leftMargin: 8
+                anchors.top: parent.top
+                anchors.bottom: parent.bottom
+                anchors.right: parent.right
+                color: cPanel; radius: 6
+                border.color: cBorder
+
+                Column {
+                    anchors.fill: parent
+                    anchors.margins: 10
+                    spacing: 8
+
+                    Text {
+                        text: controller.browserStemName
+                            ? controller.browserStemName.toUpperCase()
+                              + " — drag to select, or use ← → arrows"
+                            : "Select a stem on the left"
+                        color: cText; font.pixelSize: 12; font.bold: true
+                    }
+
+                    // Waveform with selection
+                    Rectangle {
+                        id: browWf
+                        width: parent.width
+                        height: 160
+                        color: cBg; radius: 4
+                        border.color: cBorder
+                        clip: true
+
+                        function fracToX(f) { return f * width }
+                        function xToFrac(x) { return Math.max(0, Math.min(1, x / width)) }
+
+                        Canvas {
+                            id: browCanvas
+                            anchors.fill: parent
+                            property var peaks: controller.browserPeaks
+                            onPeaksChanged: requestPaint()
+                            onWidthChanged: requestPaint()
+                            onHeightChanged: requestPaint()
+                            onPaint: {
+                                var ctx = getContext("2d")
+                                ctx.clearRect(0, 0, width, height)
+                                if (!peaks || peaks.length < 2) {
+                                    ctx.fillStyle = "#7878A0"
+                                    ctx.font = "12px sans-serif"
+                                    ctx.textAlign = "center"
+                                    ctx.fillText("No stem loaded",
+                                        width / 2, height / 2)
+                                    return
+                                }
+                                var nBins = peaks.length / 2
+                                var mid = height / 2
+                                var halfH = height / 2 - 2
+                                var colW = width / nBins
+                                ctx.fillStyle = "#5A7AB8"
+                                for (var i = 0; i < nBins; i++) {
+                                    var mn = peaks[i * 2]
+                                    var mx = peaks[i * 2 + 1]
+                                    var y1 = mid - mx * halfH
+                                    var y2 = mid - mn * halfH
+                                    ctx.fillRect(i * colW, y1,
+                                        Math.max(1, colW - 0.5),
+                                        Math.max(1, y2 - y1))
+                                }
+                                ctx.fillStyle = "#2E2E3A"
+                                ctx.fillRect(0, mid - 0.5, width, 1)
+                            }
+                        }
+
+                        // Selection highlight
+                        Rectangle {
+                            x: browWf.fracToX(controller.browserSelStartFrac)
+                            width: Math.max(0,
+                                browWf.fracToX(controller.browserSelEndFrac)
+                                - browWf.fracToX(controller.browserSelStartFrac))
+                            y: 0; height: parent.height
+                            color: cAccent; opacity: 0.2
+                        }
+
+                        // START marker
+                        Rectangle {
+                            id: browStart
+                            x: browWf.fracToX(controller.browserSelStartFrac) - 1
+                            y: 0; width: 2; height: parent.height
+                            color: cGreen
+                            Rectangle {
+                                anchors.top: parent.top
+                                anchors.horizontalCenter: parent.horizontalCenter
+                                width: 14; height: 14; radius: 2
+                                color: cGreen
+                                border.color: controller.browserActiveMarker === "start"
+                                    ? "white" : "transparent"
+                                border.width: 2
+                                Text { anchors.centerIn: parent; text: "S"
+                                    color: "white"; font.pixelSize: 9; font.bold: true }
+                            }
+                            MouseArea {
+                                anchors.fill: parent
+                                anchors.margins: -8
+                                onPressed: controller.setBrowserActiveMarker("start")
+                                onPositionChanged: if (pressed) {
+                                    var f = browWf.xToFrac(
+                                        browStart.x + 1 + mouseX)
+                                    controller.setBrowserSelection(
+                                        f, controller.browserSelEndFrac)
+                                }
+                            }
+                        }
+                        // END marker
+                        Rectangle {
+                            id: browEnd
+                            x: browWf.fracToX(controller.browserSelEndFrac) - 1
+                            y: 0; width: 2; height: parent.height
+                            color: cOrange
+                            Rectangle {
+                                anchors.top: parent.top
+                                anchors.horizontalCenter: parent.horizontalCenter
+                                width: 14; height: 14; radius: 2
+                                color: cOrange
+                                border.color: controller.browserActiveMarker === "end"
+                                    ? "white" : "transparent"
+                                border.width: 2
+                                Text { anchors.centerIn: parent; text: "E"
+                                    color: "white"; font.pixelSize: 9; font.bold: true }
+                            }
+                            MouseArea {
+                                anchors.fill: parent
+                                anchors.margins: -8
+                                onPressed: controller.setBrowserActiveMarker("end")
+                                onPositionChanged: if (pressed) {
+                                    var f = browWf.xToFrac(
+                                        browEnd.x + 1 + mouseX)
+                                    controller.setBrowserSelection(
+                                        controller.browserSelStartFrac, f)
+                                }
+                            }
+                        }
+                    }
+
+                    // Selection info
+                    Row {
+                        spacing: 16
+                        Text {
+                            text: "Start: " + controller.browserSelStartSec.toFixed(2) + "s"
+                            color: cGreen; font.pixelSize: 11; font.bold: true
+                        }
+                        Text {
+                            text: "End: " + controller.browserSelEndSec.toFixed(2) + "s"
+                            color: cOrange; font.pixelSize: 11; font.bold: true
+                        }
+                        Text {
+                            text: "Duration: " + controller.browserSelDurationSec.toFixed(2) + "s"
+                            color: cText; font.pixelSize: 11; font.bold: true
+                        }
+                        Text {
+                            text: "Editing: " + (controller.browserActiveMarker === "start"
+                                ? "START (press Tab to switch)"
+                                : "END (press Tab to switch)")
+                            color: cMuted; font.pixelSize: 10
+                        }
+                    }
+
+                    // Marker nudge buttons (for mouse / future rotary)
+                    Row {
+                        spacing: 6
+                        MiniBtn {
+                            label: controller.browserActiveMarker === "start"
+                                ? "● START" : "○ START"
+                            selected: controller.browserActiveMarker === "start"
+                            selColor: cGreen
+                            onClicked: controller.setBrowserActiveMarker("start")
+                        }
+                        MiniBtn {
+                            label: controller.browserActiveMarker === "end"
+                                ? "● END" : "○ END"
+                            selected: controller.browserActiveMarker === "end"
+                            selColor: cOrange
+                            onClicked: controller.setBrowserActiveMarker("end")
+                        }
+                        MiniBtn { label: "−0.5s"
+                            onClicked: controller.nudgeBrowserMarker(-0.5) }
+                        MiniBtn { label: "−50ms"
+                            onClicked: controller.nudgeBrowserMarker(-0.05) }
+                        MiniBtn { label: "+50ms"
+                            onClicked: controller.nudgeBrowserMarker(0.05) }
+                        MiniBtn { label: "+0.5s"
+                            onClicked: controller.nudgeBrowserMarker(0.5) }
+                    }
+
+                    Rectangle { width: parent.width; height: 1; color: cBorder }
+
+                    // Assign row
+                    Row {
+                        spacing: 10
+                        MiniBtn {
+                            label: "▶ Preview (Space)"
+                            selColor: cGreen
+                            onClicked: controller.previewBrowserSelection()
+                        }
+                        Text {
+                            text: "Assign to pad:"
+                            color: cText; font.pixelSize: 11
+                            anchors.verticalCenter: parent.verticalCenter
+                        }
+                        SpinBox {
+                            id: browPadSpin
+                            from: 1; to: controller.gridSize
+                            value: browserTargetPad + 1
+                            onValueModified: browserTargetPad = value - 1
+                            anchors.verticalCenter: parent.verticalCenter
+                        }
+                        MiniBtn {
+                            label: "→ Assign (Enter)"
+                            selected: true; selColor: cAccent
+                            onClicked: controller.assignBrowserSelectionToPad(
+                                browserTargetPad)
+                        }
+                    }
+
+                    Text {
+                        text: "Tip: ← → move the active marker · Shift+← → = big steps · "
+                            + "Tab switches marker · Space previews · Enter assigns"
+                        color: cMuted; font.pixelSize: 9
+                        wrapMode: Text.WordWrap; width: parent.width
+                    }
+                }
+            }
+        }
+
+        // ═══ FILE MODE (Scenario A) ═══
+        Item {
+            visible: browserMode === 1
+            anchors.top: browserHeader.bottom
+            anchors.bottom: parent.bottom
+            anchors.left: parent.left; anchors.right: parent.right
+            anchors.margins: 8
+
+            Column {
+                anchors.centerIn: parent
+                spacing: 20
+                width: parent.width * 0.7
+
+                Text {
+                    text: "Load your own sample"
+                    color: cText; font.pixelSize: 18; font.bold: true
+                    anchors.horizontalCenter: parent.horizontalCenter
+                }
+                Text {
+                    text: "Pick an audio file (WAV, MP3, FLAC...) and assign it "
+                        + "directly to a pad. You can trim it afterwards in the "
+                        + "Sample Editor."
+                    color: cMuted; font.pixelSize: 12
+                    wrapMode: Text.WordWrap; width: parent.width
+                    horizontalAlignment: Text.AlignHCenter
+                }
+
+                Row {
+                    spacing: 12
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    Text {
+                        text: "Target pad:"
+                        color: cText; font.pixelSize: 13
+                        anchors.verticalCenter: parent.verticalCenter
+                    }
+                    SpinBox {
+                        from: 1; to: controller.gridSize
+                        value: browserTargetPad + 1
+                        onValueModified: browserTargetPad = value - 1
+                        anchors.verticalCenter: parent.verticalCenter
+                    }
+                }
+
+                Rectangle {
+                    width: 200; height: 50; radius: 8
+                    color: fileBtnM.containsMouse ? cAccent : cCard
+                    border.color: cAccent; border.width: 2
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    Text { anchors.centerIn: parent
+                        text: "📂 Choose File..."
+                        color: cText; font.pixelSize: 14; font.bold: true }
+                    MouseArea { id: fileBtnM; anchors.fill: parent
+                        hoverEnabled: true
+                        onClicked: sampleFileDialog.open() }
+                }
+            }
+        }
+    }
+
 
     // ════════════════════════════════════════════════════════════════
     // SETTINGS OVERLAY — 5 tabs

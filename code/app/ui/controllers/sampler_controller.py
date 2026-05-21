@@ -25,7 +25,7 @@ from app.audio.separation.separator import DemucsSeparator, DummySeparator
 from app.audio.slicing.pad_assigner import CATEGORY_COLORS
 from app.audio.metronome import Metronome
 from app.audio.recording import Recorder, Player, RecordedSequence
-from app.core.models import Pad, PadMode, Project, Sample
+from app.core.models import Pad, PadMode, Project, Sample, SampleCategory
 from app.core.settings import (
     DRUM_PRESETS, LOOP_PRESETS, VOCAL_PRESETS, AppSettings,
 )
@@ -212,8 +212,70 @@ class MidiKeyboardModel(QAbstractListModel):
 
 
 # ---------------------------------------------------------------------------
-# Import worker
+# Stem Browser model (for manual sample creation from stems)
 # ---------------------------------------------------------------------------
+
+class StemBrowserModel(QAbstractListModel):
+    """Lists the available stems (drums/bass/vocals/other) for the browser."""
+    StemIdRole       = Qt.ItemDataRole.UserRole + 1
+    StemTypeRole     = Qt.ItemDataRole.UserRole + 2
+    DisplayNameRole  = Qt.ItemDataRole.UserRole + 3
+    DurationRole     = Qt.ItemDataRole.UserRole + 4
+    IsSelectedRole   = Qt.ItemDataRole.UserRole + 5
+    ColorRole        = Qt.ItemDataRole.UserRole + 6
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._stems = []
+        self._selected_idx = 0
+
+    def roleNames(self):
+        return {
+            self.StemIdRole:      b"stemId",
+            self.StemTypeRole:    b"stemType",
+            self.DisplayNameRole: b"displayName",
+            self.DurationRole:    b"durationSec",
+            self.IsSelectedRole:  b"isSelected",
+            self.ColorRole:       b"color",
+        }
+
+    def rowCount(self, parent=QModelIndex()):
+        return len(self._stems)
+
+    def data(self, index, role):
+        if not index.isValid():
+            return None
+        st = self._stems[index.row()]
+        if role == self.StemIdRole:       return st.get("stem_id", "")
+        if role == self.StemTypeRole:     return st.get("stem_type", "")
+        if role == self.DisplayNameRole:  return st.get("display_name", "")
+        if role == self.DurationRole:     return st.get("duration_sec", 0.0)
+        if role == self.IsSelectedRole:   return index.row() == self._selected_idx
+        if role == self.ColorRole:        return st.get("color", "#888888")
+        return None
+
+    def set_stems(self, stems: list[dict]):
+        self.beginResetModel()
+        self._stems = stems
+        self._selected_idx = 0 if stems else -1
+        self.endResetModel()
+
+    def select(self, index: int):
+        if 0 <= index < len(self._stems):
+            old = self._selected_idx
+            self._selected_idx = index
+            for i in (old, index):
+                if 0 <= i < len(self._stems):
+                    idx = self.index(i, 0)
+                    self.dataChanged.emit(idx, idx, [self.IsSelectedRole])
+
+    def selected_stem_id(self) -> Optional[str]:
+        if 0 <= self._selected_idx < len(self._stems):
+            return self._stems[self._selected_idx].get("stem_id")
+        return None
+
+
+
 
 class ImportWorker(QObject):
     progress = pyqtSignal(float, str)
@@ -270,6 +332,10 @@ class SamplerController(QObject):
     recordStateChanged          = pyqtSignal()
     playerStateChanged          = pyqtSignal()
     sequenceUpdated             = pyqtSignal()
+    # NEW: Stem Browser
+    browserStemsChanged         = pyqtSignal()
+    browserSelectionChanged     = pyqtSignal()
+    browserStemViewChanged      = pyqtSignal()
 
     def __init__(self, cache_dir: Path, use_demucs: bool = True):
         super().__init__()
@@ -318,6 +384,17 @@ class SamplerController(QObject):
         # NEW: output device list & selection
         self._output_devices: list[dict] = []
         self._selected_output_device: Optional[str] = None  # None = system default
+
+        # NEW: Stem Browser state ────────────────────────────────────────
+        self._stem_browser_model = StemBrowserModel()
+        self._browser_stem_id: Optional[str] = None      # currently viewed stem
+        self._browser_peaks: list[float] = []            # peaks of viewed stem
+        self._browser_view_start: int = 0                # view window (samples)
+        self._browser_view_end: int = 1
+        self._browser_sel_start: int = 0                 # selection (samples)
+        self._browser_sel_end: int = 1
+        self._browser_active_marker: str = "start"       # "start" or "end"
+        self._browser_peak_cache: dict[str, list[float]] = {}
 
         # NEW: per-stem annotation cache (auto-analyzed on pad select)
         self._stem_annotation_cache: dict[str, list[dict]] = {}
@@ -678,6 +755,61 @@ class SamplerController(QObject):
     @pyqtProperty(bool, notify=sequenceUpdated)
     def hasRecordedSequence(self):
         return self._recorder.event_count > 0 or self._player._sequence is not None
+
+    # --- NEW: Stem Browser properties ---
+    @pyqtProperty(QObject, constant=True)
+    def stemBrowserModel(self): return self._stem_browser_model
+
+    @pyqtProperty(list, notify=browserStemViewChanged)
+    def browserPeaks(self): return self._browser_peaks
+
+    @pyqtProperty(str, notify=browserStemViewChanged)
+    def browserStemName(self):
+        st = self._project.stem_by_id(self._browser_stem_id) if (
+            self._project and self._browser_stem_id) else None
+        if not st:
+            return ""
+        return st.stem_type.value if hasattr(st.stem_type, "value") else str(st.stem_type)
+
+    @pyqtProperty(float, notify=browserSelectionChanged)
+    def browserSelStartFrac(self):
+        """Selection start as fraction of the browser view window."""
+        vlen = self._browser_view_end - self._browser_view_start
+        if vlen <= 0: return 0.0
+        return max(0.0, min(1.0,
+            (self._browser_sel_start - self._browser_view_start) / vlen))
+
+    @pyqtProperty(float, notify=browserSelectionChanged)
+    def browserSelEndFrac(self):
+        """Selection end as fraction of the browser view window."""
+        vlen = self._browser_view_end - self._browser_view_start
+        if vlen <= 0: return 1.0
+        return max(0.0, min(1.0,
+            (self._browser_sel_end - self._browser_view_start) / vlen))
+
+    @pyqtProperty(float, notify=browserSelectionChanged)
+    def browserSelStartSec(self):
+        st = self._project.stem_by_id(self._browser_stem_id) if (
+            self._project and self._browser_stem_id) else None
+        sr = st.sample_rate if st else 44100
+        return self._browser_sel_start / sr
+
+    @pyqtProperty(float, notify=browserSelectionChanged)
+    def browserSelEndSec(self):
+        st = self._project.stem_by_id(self._browser_stem_id) if (
+            self._project and self._browser_stem_id) else None
+        sr = st.sample_rate if st else 44100
+        return self._browser_sel_end / sr
+
+    @pyqtProperty(float, notify=browserSelectionChanged)
+    def browserSelDurationSec(self):
+        st = self._project.stem_by_id(self._browser_stem_id) if (
+            self._project and self._browser_stem_id) else None
+        sr = st.sample_rate if st else 44100
+        return (self._browser_sel_end - self._browser_sel_start) / sr
+
+    @pyqtProperty(str, notify=browserSelectionChanged)
+    def browserActiveMarker(self): return self._browser_active_marker
 
     # --- NEW: Playback position (for waveform playhead) ---
     @pyqtProperty(float, notify=playbackPositionChanged)
@@ -1474,12 +1606,275 @@ class SamplerController(QObject):
         self.sequenceUpdated.emit()
         self.playerStateChanged.emit()
 
-    # ---- Internal callbacks for metronome/record/player ----
+    # ===================================================================
+    # NEW: Stem Browser slots (manual sample creation)
+    # ===================================================================
 
-    def _on_metronome_beat(self, beat_index: int, is_downbeat: bool):
-        self._current_beat = beat_index
+    @pyqtSlot()
+    def openStemBrowser(self):
+        """Populate the stem browser with the project's stems."""
+        if not self._project or not self._project.stems:
+            self._set_status("No stems available — load a track first")
+            return
+        stem_colors = {
+            "drums":  "#E74C3C",
+            "bass":   "#9B59B6",
+            "vocals": "#3D8EF0",
+            "other":  "#1ABC9C",
+            "piano":  "#F39C12",
+            "guitar": "#E67E22",
+        }
+        stems_data = []
+        for st in self._project.stems:
+            stype = st.stem_type.value if hasattr(st.stem_type, "value") \
+                else str(st.stem_type)
+            stems_data.append({
+                "stem_id": st.id,
+                "stem_type": stype,
+                "display_name": stype.capitalize(),
+                "duration_sec": st.duration_samples / max(1, st.sample_rate),
+                "color": stem_colors.get(stype, "#888888"),
+            })
+        self._stem_browser_model.set_stems(stems_data)
+        self.browserStemsChanged.emit()
+        # Auto-select the first stem
+        if stems_data:
+            self.selectBrowserStem(0)
+
+    @pyqtSlot(int)
+    def selectBrowserStem(self, index: int):
+        """Select a stem to view in the browser by model index."""
+        self._stem_browser_model.select(index)
+        stem_id = self._stem_browser_model.selected_stem_id()
+        if not stem_id:
+            return
+        self._browser_stem_id = stem_id
+        stem = self._project.stem_by_id(stem_id)
+        if not stem:
+            return
+        # Reset view to whole stem, selection to first 2 seconds
+        self._browser_view_start = 0
+        self._browser_view_end = max(1, stem.duration_samples)
+        self._browser_sel_start = 0
+        two_sec = min(stem.duration_samples, stem.sample_rate * 2)
+        self._browser_sel_end = max(1, two_sec)
+        self._browser_active_marker = "start"
+        self._refresh_browser_peaks()
+        self.browserStemViewChanged.emit()
+        self.browserSelectionChanged.emit()
+
+    def _refresh_browser_peaks(self):
+        """Compute peaks for the browser's current stem view window."""
+        if not self._browser_stem_id or not self._project:
+            self._browser_peaks = []
+            return
+        stem = self._project.stem_by_id(self._browser_stem_id)
+        if not stem or not stem.path or not stem.path.exists():
+            self._browser_peaks = []
+            return
+        cache_key = (
+            f"{self._browser_stem_id}:"
+            f"{self._browser_view_start}:{self._browser_view_end}"
+        )
+        cached = self._browser_peak_cache.get(cache_key)
+        if cached is not None:
+            self._browser_peaks = cached
+            return
+        from app.audio.dsp.waveform_peaks import compute_region_peaks
+        peaks = compute_region_peaks(
+            stem.path, self._browser_view_start, self._browser_view_end,
+            num_bins=600,
+        )
+        self._browser_peak_cache[cache_key] = peaks
+        self._browser_peaks = peaks
+
+    @pyqtSlot(str)
+    def setBrowserActiveMarker(self, marker: str):
+        """Set which marker the controls move: 'start' or 'end'."""
+        if marker in ("start", "end"):
+            self._browser_active_marker = marker
+            self.browserSelectionChanged.emit()
+
+    @pyqtSlot()
+    def toggleBrowserActiveMarker(self):
+        """Switch between START and END marker (Tab key / button)."""
+        self._browser_active_marker = (
+            "end" if self._browser_active_marker == "start" else "start"
+        )
+        self.browserSelectionChanged.emit()
+
+    @pyqtSlot(float)
+    def nudgeBrowserMarker(self, amount_sec: float):
+        """
+        Move the active marker by amount_sec (can be negative).
+        Used by arrow keys / rotary encoder.
+        """
+        if not self._browser_stem_id or not self._project:
+            return
+        stem = self._project.stem_by_id(self._browser_stem_id)
+        if not stem:
+            return
+        delta = int(amount_sec * stem.sample_rate)
+        min_gap = max(1, stem.sample_rate // 20)  # 50ms minimum selection
+
+        if self._browser_active_marker == "start":
+            new_start = self._browser_sel_start + delta
+            new_start = max(0, min(new_start, self._browser_sel_end - min_gap))
+            self._browser_sel_start = new_start
+        else:
+            new_end = self._browser_sel_end + delta
+            new_end = max(self._browser_sel_start + min_gap,
+                          min(new_end, stem.duration_samples))
+            self._browser_sel_end = new_end
+        self.browserSelectionChanged.emit()
+
+    @pyqtSlot(float, float)
+    def setBrowserSelection(self, start_frac: float, end_frac: float):
+        """Set selection from view-window fractions (mouse drag)."""
+        if not self._browser_stem_id or not self._project:
+            return
+        stem = self._project.stem_by_id(self._browser_stem_id)
+        if not stem:
+            return
+        vstart = self._browser_view_start
+        vlen = self._browser_view_end - self._browser_view_start
+        a = max(0.0, min(1.0, min(start_frac, end_frac)))
+        b = max(0.0, min(1.0, max(start_frac, end_frac)))
+        min_gap = max(1, stem.sample_rate // 20)
+        self._browser_sel_start = int(vstart + a * vlen)
+        self._browser_sel_end = max(self._browser_sel_start + min_gap,
+                                    int(vstart + b * vlen))
+        self.browserSelectionChanged.emit()
+
+    @pyqtSlot()
+    def previewBrowserSelection(self):
+        """Play the current browser selection through the engine."""
+        if not self._browser_stem_id or not self._project:
+            return
+        stem = self._project.stem_by_id(self._browser_stem_id)
+        if not stem:
+            return
+        # Build a temporary sample for preview
+        temp = Sample(
+            name="__browser_preview__",
+            category=SampleCategory.USER,
+            source_stem_id=self._browser_stem_id,
+            start_sample=self._browser_sel_start,
+            end_sample=self._browser_sel_end,
+        )
+        try:
+            self.engine.register_sample(temp)
+            pad = Pad(index=-1, sample_id=temp.id)
+            self.engine.trigger_pad(pad, temp)
+        except Exception as e:
+            log.warning("Browser preview failed: %s", e)
+
+    @pyqtSlot(int)
+    def assignBrowserSelectionToPad(self, pad_index: int):
+        """
+        Create a new Sample from the current browser selection and assign it
+        to the given pad. This is the core 'manual chop' action.
+        """
+        if not self._browser_stem_id or not self._project:
+            self._set_status("No stem selected")
+            return
+        bank = self._project.active_bank()
+        if not bank or not (0 <= pad_index < len(bank.pads)):
+            self._set_status("Invalid pad")
+            return
+        stem = self._project.stem_by_id(self._browser_stem_id)
+        if not stem:
+            return
+
+        stype = stem.stem_type.value if hasattr(stem.stem_type, "value") \
+            else str(stem.stem_type)
+        new_sample = Sample(
+            name=f"{stype.capitalize()} chop",
+            category=SampleCategory.USER,
+            source_stem_id=self._browser_stem_id,
+            start_sample=self._browser_sel_start,
+            end_sample=self._browser_sel_end,
+        )
+        self._project.samples.append(new_sample)
+        try:
+            self.engine.register_sample(new_sample)
+        except Exception as e:
+            log.warning("Register new sample failed: %s", e)
+
+        # Assign to pad
+        pad = bank.pads[pad_index]
+        pad.sample_id = new_sample.id
+        pad.label = new_sample.name
+        stem_colors = {
+            "drums": "#E74C3C", "bass": "#9B59B6", "vocals": "#3D8EF0",
+            "other": "#1ABC9C", "piano": "#F39C12", "guitar": "#E67E22",
+        }
+        pad.color = stem_colors.get(stype, "#888888")
+
+        # Refresh pad model
+        self._pad_model.set_pads(bank.pads)
+        self._set_status(
+            f"Assigned {new_sample.name} "
+            f"({self.browserSelDurationSec:.2f}s) to pad {pad_index + 1}"
+        )
+
+    @pyqtSlot(str, int)
+    def loadSampleFromFile(self, file_url: str, pad_index: int):
+        """
+        Scenario A: load an external audio file directly onto a pad.
+        Creates a path-based Sample (no stem needed).
+        """
+        path = self._qml_file_to_path(file_url)
+        if not path.exists():
+            self._set_status(f"File not found: {path}")
+            return
+        if not self._project:
+            # Create a minimal project so we have a bank to assign into
+            self._set_status("Load a track first to create a pad bank")
+            return
+        bank = self._project.active_bank()
+        if not bank or not (0 <= pad_index < len(bank.pads)):
+            self._set_status("Invalid pad")
+            return
+
+        # Determine the file's length in samples
+        try:
+            import soundfile as sf
+            info = sf.info(str(path))
+            total_samples = int(info.frames)
+            sr = int(info.samplerate)
+        except Exception as e:
+            log.warning("Could not read file info: %s", e)
+            total_samples = 0
+            sr = 44100
+
+        new_sample = Sample(
+            name=path.stem,
+            category=SampleCategory.USER,
+            path=path,
+            start_sample=0,
+            end_sample=total_samples,
+        )
+        self._project.samples.append(new_sample)
+        try:
+            self.engine.register_sample(new_sample)
+        except Exception as e:
+            log.warning("Register file sample failed: %s", e)
+
+        pad = bank.pads[pad_index]
+        pad.sample_id = new_sample.id
+        pad.label = new_sample.name
+        pad.color = "#F1C40F"  # user files = yellow
+        self._pad_model.set_pads(bank.pads)
+        self._set_status(f"Loaded '{path.name}' to pad {pad_index + 1}")
+
         self._is_downbeat = is_downbeat
         self.beatTick.emit(beat_index, is_downbeat)
+
+    def _on_metronome_beat(self, beat_index: int, is_downbeat: bool):
+        self._current_beat = int(beat_index)
+        self._is_downbeat = bool(is_downbeat)
+        self.beatTick.emit(self._current_beat, self._is_downbeat)
 
     def _on_count_in_done(self):
         # Count-in finished: stop metronome (unless user wanted it on)
