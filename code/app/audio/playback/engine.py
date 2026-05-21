@@ -124,9 +124,17 @@ class SounddevicePlaybackEngine(PlaybackEngine):
     @staticmethod
     def list_output_devices() -> list[dict]:
         """
-        Return a list of available audio OUTPUT devices.
+        Return a deduplicated list of audio OUTPUT devices.
+
+        sounddevice/PortAudio lists the same physical device once per host API
+        (on Windows: MME, WASAPI, DirectSound, WDM-KS), which produces many
+        duplicates. We keep ONE entry per device name, preferring the best
+        host API available (WASAPI > WDM-KS > DirectSound > MME on Windows;
+        first-seen elsewhere).
+
         Each dict: { 'index': int, 'name': str, 'channels': int,
-                     'default_samplerate': float, 'is_default': bool }
+                     'default_samplerate': float, 'is_default': bool,
+                     'hostapi': str }
         """
         try:
             import sounddevice as sd
@@ -135,21 +143,63 @@ class SounddevicePlaybackEngine(PlaybackEngine):
 
         try:
             devices = sd.query_devices()
+            hostapis = sd.query_hostapis()
             default_out_idx = sd.default.device[1] if sd.default.device else -1
         except Exception as e:
             log.warning("Failed to query audio devices: %s", e)
             return []
 
-        result = []
+        # Host API preference ranking (higher = better). Names vary by OS.
+        api_rank = {
+            "Windows WASAPI": 100,
+            "Windows WDM-KS": 80,
+            "Windows DirectSound": 60,
+            "MME": 40,
+            "Core Audio": 100,     # macOS
+            "ALSA": 100,           # Linux
+            "JACK Audio Connection Kit": 90,
+            "PulseAudio": 70,
+        }
+
+        def api_name(api_idx: int) -> str:
+            if 0 <= api_idx < len(hostapis):
+                return hostapis[api_idx].get("name", "")
+            return ""
+
+        # Group candidates by a normalized device name
+        best_by_name: dict[str, dict] = {}
         for i, dev in enumerate(devices):
-            if dev.get("max_output_channels", 0) > 0:
-                result.append({
-                    "index": i,
-                    "name": dev.get("name", f"Device {i}"),
-                    "channels": dev.get("max_output_channels", 2),
-                    "default_samplerate": float(dev.get("default_samplerate", 44100)),
-                    "is_default": (i == default_out_idx),
-                })
+            if dev.get("max_output_channels", 0) <= 0:
+                continue
+            raw_name = dev.get("name", f"Device {i}")
+            # Normalize: strip the host API suffix some drivers append
+            name = raw_name.strip()
+            this_api = api_name(dev.get("hostapi", -1))
+            rank = api_rank.get(this_api, 10)
+
+            entry = {
+                "index": i,
+                "name": name,
+                "channels": dev.get("max_output_channels", 2),
+                "default_samplerate": float(dev.get("default_samplerate", 44100)),
+                "is_default": (i == default_out_idx),
+                "hostapi": this_api,
+                "_rank": rank,
+            }
+
+            existing = best_by_name.get(name)
+            if existing is None or rank > existing["_rank"]:
+                best_by_name[name] = entry
+            elif existing is not None and i == default_out_idx:
+                # Always keep the system-default index if it matches this name
+                existing["is_default"] = True
+
+        # Strip the internal _rank key and sort: default first, then by name
+        result = []
+        for entry in best_by_name.values():
+            entry.pop("_rank", None)
+            result.append(entry)
+        result.sort(key=lambda e: (not e["is_default"], e["name"].lower()))
         return result
 
     @staticmethod
@@ -160,7 +210,7 @@ class SounddevicePlaybackEngine(PlaybackEngine):
             default_out_idx = sd.default.device[1]
             devs = sd.query_devices()
             if 0 <= default_out_idx < len(devs):
-                return devs[default_out_idx].get("name", "Default")
+                return devs[default_out_idx].get("name", "Default").strip()
         except Exception:
             pass
         return "Default"

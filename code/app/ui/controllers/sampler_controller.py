@@ -336,6 +336,7 @@ class SamplerController(QObject):
     browserStemsChanged         = pyqtSignal()
     browserSelectionChanged     = pyqtSignal()
     browserStemViewChanged      = pyqtSignal()
+    browserPlayheadChanged      = pyqtSignal()
 
     def __init__(self, cache_dir: Path, use_demucs: bool = True):
         super().__init__()
@@ -395,6 +396,11 @@ class SamplerController(QObject):
         self._browser_sel_end: int = 1
         self._browser_active_marker: str = "start"       # "start" or "end"
         self._browser_peak_cache: dict[str, list[float]] = {}
+        # Browser preview playhead tracking
+        self._browser_preview_active: bool = False
+        self._browser_preview_start: int = 0
+        self._browser_preview_end: int = 1
+        self._browser_playhead_frac: float = 0.0
 
         # NEW: per-stem annotation cache (auto-analyzed on pad select)
         self._stem_annotation_cache: dict[str, list[dict]] = {}
@@ -475,8 +481,21 @@ class SamplerController(QObject):
     def _build_pipeline(self) -> SamplerPipeline:
         from app.audio.slicing.auto_slicer import AutoSlicer
         from app.audio.slicing.pad_assigner import PadAssigner
+        sep = None
         if self._use_demucs:
             sep = DemucsSeparator(model_name=self._settings.demucs_model)
+            # Verify Demucs is actually installed; if not, fall back gracefully
+            try:
+                available, msg = sep.is_available()
+            except Exception:
+                available, msg = False, "Demucs check failed"
+            if not available:
+                log.warning("Demucs unavailable (%s) — falling back to "
+                            "heuristic separator", msg)
+                self._set_status(
+                    "AI separation not installed — using basic separation"
+                )
+                sep = HeuristicSeparator()
         else:
             sep = HeuristicSeparator()
         return SamplerPipeline(
@@ -763,6 +782,15 @@ class SamplerController(QObject):
     @pyqtProperty(list, notify=browserStemViewChanged)
     def browserPeaks(self): return self._browser_peaks
 
+    @pyqtProperty(float, notify=browserPlayheadChanged)
+    def browserPlayheadFrac(self):
+        """Playhead position as fraction of the view window (0 if not playing)."""
+        return self._browser_playhead_frac
+
+    @pyqtProperty(bool, notify=browserPlayheadChanged)
+    def browserIsPreviewing(self):
+        return self._browser_preview_active
+
     @pyqtProperty(str, notify=browserStemViewChanged)
     def browserStemName(self):
         st = self._project.stem_by_id(self._browser_stem_id) if (
@@ -861,7 +889,34 @@ class SamplerController(QObject):
             self._playback_position_frac = new_pos
             self.playbackPositionChanged.emit()
 
-    # --- Beats for snap ---
+        # Browser preview playhead (pad_index == -2)
+        if self._browser_preview_active:
+            bpos = 0.0
+            found = False
+            try:
+                for v in getattr(self.engine, "_voices", []):
+                    if v.pad_index == -2 and v.active and len(v.audio) > 0:
+                        voice_frac = v.position / len(v.audio)
+                        # Map voice progress onto the browser view window
+                        vstart = self._browser_view_start
+                        vlen = self._browser_view_end - self._browser_view_start
+                        if vlen > 0:
+                            abs_pos = (self._browser_preview_start
+                                       + voice_frac
+                                       * (self._browser_preview_end
+                                          - self._browser_preview_start))
+                            bpos = (abs_pos - vstart) / vlen
+                        found = True
+                        break
+            except Exception:
+                pass
+            if not found:
+                # Preview finished
+                self._browser_preview_active = False
+                bpos = 0.0
+            if abs(bpos - self._browser_playhead_frac) > 0.001 or not found:
+                self._browser_playhead_frac = max(0.0, min(1.0, bpos))
+                self.browserPlayheadChanged.emit()
     @pyqtProperty(list, notify=currentSampleChanged)
     def currentSampleBeats(self):
         """Beat positions as fractions of the VIEW WINDOW (for grid overlay)."""
@@ -1412,10 +1467,23 @@ class SamplerController(QObject):
         Falls back gracefully if the device can't be opened.
         """
         new_device = device_name if device_name and device_name != "Default" else None
+        self._switch_device(new_device)
+
+    @pyqtSlot(int)
+    def setOutputDeviceByIndex(self, device_index: int):
+        """
+        Switch audio output by PortAudio device index (more reliable than
+        name — names can be duplicated across host APIs). Pass -1 for the
+        system default.
+        """
+        self._switch_device(device_index if device_index >= 0 else None)
+
+    def _switch_device(self, new_device):
+        """Shared device-switch logic. new_device may be int index, str name,
+        or None (system default)."""
         if new_device == self._selected_output_device:
             return
 
-        previous_device = self._selected_output_device
         self._selected_output_device = new_device
         self._rebuild_engine()
 
@@ -1435,14 +1503,13 @@ class SamplerController(QObject):
             except Exception as e:
                 log.warning("Reloading samples after device switch failed: %s", e)
 
-        actual = self._selected_output_device or "Default"
-        if new_device and self._selected_output_device != new_device:
-            # We asked for new_device but ended up elsewhere (fallback)
-            self._set_status(
-                f"Could not use '{new_device}', staying on {actual}"
-            )
+        actual = self._selected_output_device
+        if actual is None:
+            self._set_status("Output device: Default")
         else:
-            self._set_status(f"Output device: {actual}")
+            self._set_status(f"Output device set (#{actual})"
+                             if isinstance(actual, int)
+                             else f"Output device: {actual}")
         self.outputDeviceChanged.emit()
 
     # --- NEW: Stems output folder slot ---
@@ -1764,8 +1831,12 @@ class SamplerController(QObject):
         )
         try:
             self.engine.register_sample(temp)
-            pad = Pad(index=-1, sample_id=temp.id)
+            pad = Pad(index=-2, sample_id=temp.id)  # -2 = browser preview
             self.engine.trigger_pad(pad, temp)
+            # Remember for playhead tracking
+            self._browser_preview_active = True
+            self._browser_preview_start = self._browser_sel_start
+            self._browser_preview_end = self._browser_sel_end
         except Exception as e:
             log.warning("Browser preview failed: %s", e)
 
@@ -1867,9 +1938,6 @@ class SamplerController(QObject):
         pad.color = "#F1C40F"  # user files = yellow
         self._pad_model.set_pads(bank.pads)
         self._set_status(f"Loaded '{path.name}' to pad {pad_index + 1}")
-
-        self._is_downbeat = is_downbeat
-        self.beatTick.emit(beat_index, is_downbeat)
 
     def _on_metronome_beat(self, beat_index: int, is_downbeat: bool):
         self._current_beat = int(beat_index)

@@ -1,5 +1,5 @@
 {
-  "quality_mode": "fast",
+  "quality_mode": "quality",
   "slicing": {
     "vocal_preset": "Medium",
     "drum_preset": "Full",

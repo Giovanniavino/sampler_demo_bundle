@@ -378,52 +378,69 @@ ApplicationWindow {
             }
         }
 
-        // Keyboard focus + shortcut handling
-        Item {
-            anchors.fill: parent
-            focus: true
-            Keys.onPressed: function(event) {
-                if (event.isAutoRepeat) return
-                // Transport shortcuts
-                if (event.key === Qt.Key_Space) {
-                    if (controller.isPlayingSequence)
-                        controller.pauseSequence()
-                    else
-                        controller.playSequence()
+        // Transport shortcuts use global Shortcut elements (focus-independent)
+        // so they fire no matter which control currently has focus.
+    }
+
+    // Global transport shortcuts — always active regardless of focus
+    Shortcut {
+        sequence: "Space"
+        enabled: !showSettings
+        onActivated: {
+            if (controller.isPlayingSequence) controller.pauseSequence()
+            else controller.playSequence()
+        }
+    }
+    Shortcut {
+        sequence: "Ctrl+R"
+        onActivated: {
+            if (controller.isRecording) controller.stopRecord()
+            else controller.armRecord()
+        }
+    }
+    Shortcut {
+        sequence: "Ctrl+M"
+        onActivated: controller.toggleMetronome()
+    }
+
+    // Pad keyboard input: an always-on key handler at root level.
+    // It re-grabs focus whenever the pointer is over the main area, so
+    // clicking a pad/slider doesn't permanently steal keyboard input.
+    Item {
+        id: padKeyHandler
+        anchors.fill: parent
+        z: -1                       // behind everything, just for key events
+        focus: !showSettings && !showBrowser && !showSampleEdit
+        Keys.onPressed: function(event) {
+            if (event.isAutoRepeat) return
+            if (event.text && event.text.length === 1) {
+                var padIdx = controller.keyToPadIndex(event.text)
+                if (padIdx >= 0) {
+                    controller.triggerPad(padIdx)
                     event.accepted = true
-                    return
-                }
-                if (event.key === Qt.Key_R && (event.modifiers & Qt.ControlModifier)) {
-                    if (controller.isRecording) controller.stopRecord()
-                    else controller.armRecord()
-                    event.accepted = true
-                    return
-                }
-                if (event.key === Qt.Key_M && (event.modifiers & Qt.ControlModifier)) {
-                    controller.toggleMetronome()
-                    event.accepted = true
-                    return
-                }
-                // Pad shortcuts
-                if (event.text && event.text.length === 1) {
-                    var padIdx = controller.keyToPadIndex(event.text)
-                    if (padIdx >= 0) {
-                        controller.triggerPad(padIdx)
-                        event.accepted = true
-                    }
-                }
-            }
-            Keys.onReleased: function(event) {
-                if (event.isAutoRepeat) return
-                if (event.text && event.text.length === 1) {
-                    var padIdx = controller.keyToPadIndex(event.text)
-                    if (padIdx >= 0) {
-                        controller.releasePad(padIdx)
-                        event.accepted = true
-                    }
                 }
             }
         }
+        Keys.onReleased: function(event) {
+            if (event.isAutoRepeat) return
+            if (event.text && event.text.length === 1) {
+                var padIdx = controller.keyToPadIndex(event.text)
+                if (padIdx >= 0) {
+                    controller.releasePad(padIdx)
+                    event.accepted = true
+                }
+            }
+        }
+    }
+
+    // Restore focus to the pad handler whenever the user clicks anywhere
+    // in the main pad area (so keyboard pads keep working after using sliders).
+    MouseArea {
+        anchors.fill: parent
+        z: -2
+        acceptedButtons: Qt.NoButton   // don't steal clicks, just observe
+        onPressed: function(mouse) { mouse.accepted = false }
+        Component.onCompleted: padKeyHandler.forceActiveFocus()
     }
 
     // ════════════════════════════════════════════════════════════════
@@ -1588,6 +1605,22 @@ ApplicationWindow {
                             color: cAccent; opacity: 0.2
                         }
 
+                        // Playhead during preview
+                        Rectangle {
+                            visible: controller.browserIsPreviewing
+                                && controller.browserPlayheadFrac > 0
+                            x: browWf.fracToX(controller.browserPlayheadFrac) - 1
+                            y: 0; width: 2; height: parent.height
+                            color: cYellow
+                            z: 50
+                            Rectangle {
+                                anchors.top: parent.top
+                                anchors.horizontalCenter: parent.horizontalCenter
+                                width: 10; height: 10; radius: 5
+                                color: cYellow
+                            }
+                        }
+
                         // START marker
                         Rectangle {
                             id: browStart
@@ -2201,7 +2234,7 @@ ApplicationWindow {
                                     id: devMA
                                     anchors.fill: parent
                                     hoverEnabled: true
-                                    onClicked: controller.setOutputDevice(modelData.name)
+                                    onClicked: controller.setOutputDeviceByIndex(modelData.index)
                                 }
                             }
                         }
