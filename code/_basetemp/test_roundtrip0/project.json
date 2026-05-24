@@ -1,0 +1,321 @@
+{
+  "schema_version": 1,
+  "project": {
+    "id": "e9bfedd4-357c-4ace-88a8-b8ce1b186831",
+    "name": "Test",
+    "version": 1,
+    "sources": [
+      {
+        "id": "4a0ec272-6c5f-4b42-9b22-675392b88e07",
+        "path": "\\tmp\\song.wav",
+        "sample_rate": 44100,
+        "channels": 2,
+        "duration_samples": 441000
+      }
+    ],
+    "stems": [
+      {
+        "id": "1d8ff3c5-c6fd-44dd-9951-e33651c13bae",
+        "source_id": "4a0ec272-6c5f-4b42-9b22-675392b88e07",
+        "stem_type": "drums",
+        "path": "\\tmp\\drums.wav",
+        "sample_rate": 44100,
+        "channels": 2,
+        "duration_samples": 441000
+      }
+    ],
+    "analyses": [
+      {
+        "source_id": "4a0ec272-6c5f-4b42-9b22-675392b88e07",
+        "bpm": 120.0,
+        "bpm_confidence": 0.0,
+        "beats": [
+          {
+            "position": 0,
+            "is_downbeat": true,
+            "confidence": 1.0
+          },
+          {
+            "position": 22050,
+            "is_downbeat": false,
+            "confidence": 1.0
+          },
+          {
+            "position": 44100,
+            "is_downbeat": false,
+            "confidence": 1.0
+          },
+          {
+            "position": 66150,
+            "is_downbeat": false,
+            "confidence": 1.0
+          },
+          {
+            "position": 88200,
+            "is_downbeat": true,
+            "confidence": 1.0
+          },
+          {
+            "position": 110250,
+            "is_downbeat": false,
+            "confidence": 1.0
+          },
+          {
+            "position": 132300,
+            "is_downbeat": false,
+            "confidence": 1.0
+          },
+          {
+            "position": 154350,
+            "is_downbeat": false,
+            "confidence": 1.0
+          }
+        ],
+        "sections": [
+          {
+            "start": 0,
+            "end": 44100,
+            "label": "intro",
+            "confidence": 1.0
+          },
+          {
+            "start": 44100,
+            "end": 88200,
+            "label": "chorus",
+            "confidence": 1.0
+          }
+        ],
+        "transients": [
+          {
+            "position": 1000,
+            "strength": 0.9
+          }
+        ],
+        "key": null,
+        "time_signature": [
+          4,
+          4
+        ]
+      }
+    ],
+    "samples": [
+      {
+        "id": "13550a46-a458-49a0-8f44-6bee70f9f8c6",
+        "name": "hit01",
+        "category": "drum_hit",
+        "source_stem_id": "1d8ff3c5-c6fd-44dd-9951-e33651c13bae",
+        "start_sample": 0,
+        "end_sample": 2000,
+        "path": null,
+        "gain_db": 0.0,
+        "pitch_semitones": 0.0,
+        "time_stretch": 1.0,
+        "reverse": false,
+        "fade_in_samples": 64,
+        "fade_out_samples": 256,
+        "normalized": false,
+        "cutoff_hz": 20000.0,
+        "highpass_hz": 20.0,
+        "pan": 0.0,
+        "loop_beats": 0,
+        "loop_ready": false,
+        "bpm": null,
+        "root_note": null,
+        "tags": []
+      },
+      {
+        "id": "0a813bd3-d471-4d03-82ba-d07a2c1e7489",
+        "name": "loop01",
+        "category": "drum_loop",
+        "source_stem_id": "1d8ff3c5-c6fd-44dd-9951-e33651c13bae",
+        "start_sample": 2000,
+        "end_sample": 10000,
+        "path": null,
+        "gain_db": 0.0,
+        "pitch_semitones": 0.0,
+        "time_stretch": 1.0,
+        "reverse": false,
+        "fade_in_samples": 64,
+        "fade_out_samples": 256,
+        "normalized": false,
+        "cutoff_hz": 20000.0,
+        "highpass_hz": 20.0,
+        "pan": 0.0,
+        "loop_beats": 0,
+        "loop_ready": false,
+        "bpm": null,
+        "root_note": null,
+        "tags": []
+      }
+    ],
+    "banks": [
+      {
+        "id": "3cc44057-b8a7-4c75-a229-d139bf70d4e2",
+        "name": "Bank A",
+        "pads": [
+          {
+            "index": 0,
+            "sample_id": "13550a46-a458-49a0-8f44-6bee70f9f8c6",
+            "mode": "one_shot",
+            "color": "#E74C3C",
+            "label": "hit01",
+            "muted": false,
+            "group": 1,
+            "choke_self": false
+          },
+          {
+            "index": 1,
+            "sample_id": null,
+            "mode": "one_shot",
+            "color": "#2C2C2C",
+            "label": "",
+            "muted": false,
+            "group": 0,
+            "choke_self": false
+          },
+          {
+            "index": 2,
+            "sample_id": null,
+            "mode": "one_shot",
+            "color": "#2C2C2C",
+            "label": "",
+            "muted": false,
+            "group": 0,
+            "choke_self": false
+          },
+          {
+            "index": 3,
+            "sample_id": null,
+            "mode": "one_shot",
+            "color": "#2C2C2C",
+            "label": "",
+            "muted": false,
+            "group": 0,
+            "choke_self": false
+          },
+          {
+            "index": 4,
+            "sample_id": null,
+            "mode": "one_shot",
+            "color": "#2C2C2C",
+            "label": "",
+            "muted": false,
+            "group": 0,
+            "choke_self": false
+          },
+          {
+            "index": 5,
+            "sample_id": null,
+            "mode": "one_shot",
+            "color": "#2C2C2C",
+            "label": "",
+            "muted": false,
+            "group": 0,
+            "choke_self": false
+          },
+          {
+            "index": 6,
+            "sample_id": null,
+            "mode": "one_shot",
+            "color": "#2C2C2C",
+            "label": "",
+            "muted": false,
+            "group": 0,
+            "choke_self": false
+          },
+          {
+            "index": 7,
+            "sample_id": null,
+            "mode": "one_shot",
+            "color": "#2C2C2C",
+            "label": "",
+            "muted": false,
+            "group": 0,
+            "choke_self": false
+          },
+          {
+            "index": 8,
+            "sample_id": null,
+            "mode": "one_shot",
+            "color": "#2C2C2C",
+            "label": "",
+            "muted": false,
+            "group": 0,
+            "choke_self": false
+          },
+          {
+            "index": 9,
+            "sample_id": null,
+            "mode": "one_shot",
+            "color": "#2C2C2C",
+            "label": "",
+            "muted": false,
+            "group": 0,
+            "choke_self": false
+          },
+          {
+            "index": 10,
+            "sample_id": null,
+            "mode": "one_shot",
+            "color": "#2C2C2C",
+            "label": "",
+            "muted": false,
+            "group": 0,
+            "choke_self": false
+          },
+          {
+            "index": 11,
+            "sample_id": null,
+            "mode": "one_shot",
+            "color": "#2C2C2C",
+            "label": "",
+            "muted": false,
+            "group": 0,
+            "choke_self": false
+          },
+          {
+            "index": 12,
+            "sample_id": "0a813bd3-d471-4d03-82ba-d07a2c1e7489",
+            "mode": "loop",
+            "color": "#C0392B",
+            "label": "loop01",
+            "muted": false,
+            "group": 0,
+            "choke_self": false
+          },
+          {
+            "index": 13,
+            "sample_id": null,
+            "mode": "one_shot",
+            "color": "#2C2C2C",
+            "label": "",
+            "muted": false,
+            "group": 0,
+            "choke_self": false
+          },
+          {
+            "index": 14,
+            "sample_id": null,
+            "mode": "one_shot",
+            "color": "#2C2C2C",
+            "label": "",
+            "muted": false,
+            "group": 0,
+            "choke_self": false
+          },
+          {
+            "index": 15,
+            "sample_id": null,
+            "mode": "one_shot",
+            "color": "#2C2C2C",
+            "label": "",
+            "muted": false,
+            "group": 0,
+            "choke_self": false
+          }
+        ]
+      }
+    ],
+    "active_bank_id": "3cc44057-b8a7-4c75-a229-d139bf70d4e2"
+  }
+}

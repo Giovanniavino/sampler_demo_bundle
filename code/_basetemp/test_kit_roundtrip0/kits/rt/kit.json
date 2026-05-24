@@ -1,0 +1,68 @@
+{
+  "schema_version": 1,
+  "kit_name": "My Kit",
+  "created_at": "2026-05-24T11:26:25",
+  "project": {
+    "id": "13405066-618e-4a05-b014-4e7cdfee6151",
+    "name": "My Kit",
+    "version": 1,
+    "sources": [],
+    "stems": [
+      {
+        "id": "3cda519e-b6e5-4480-837f-11b45c0b7bd0",
+        "source_id": "",
+        "stem_type": "drums",
+        "path": "stems/drums.wav",
+        "sample_rate": 22050,
+        "channels": 2,
+        "duration_samples": 4410
+      }
+    ],
+    "analyses": [],
+    "samples": [
+      {
+        "id": "cf27d9e5-d6be-4547-86a7-74bed9d96d85",
+        "name": "hit",
+        "category": "drum_hit",
+        "source_stem_id": "3cda519e-b6e5-4480-837f-11b45c0b7bd0",
+        "start_sample": 0,
+        "end_sample": 2000,
+        "path": null,
+        "gain_db": 0.0,
+        "pitch_semitones": 0.0,
+        "time_stretch": 1.0,
+        "reverse": false,
+        "fade_in_samples": 64,
+        "fade_out_samples": 256,
+        "normalized": false,
+        "cutoff_hz": 8000.0,
+        "highpass_hz": 20.0,
+        "pan": -0.5,
+        "loop_beats": 4,
+        "loop_ready": false,
+        "bpm": null,
+        "root_note": null,
+        "tags": []
+      }
+    ],
+    "banks": [
+      {
+        "id": "c4267368-bee3-47f9-add5-cd5de513821b",
+        "name": "A",
+        "pads": [
+          {
+            "index": 0,
+            "sample_id": "cf27d9e5-d6be-4547-86a7-74bed9d96d85",
+            "mode": "one_shot",
+            "color": "#888888",
+            "label": "",
+            "muted": false,
+            "group": 1,
+            "choke_self": false
+          }
+        ]
+      }
+    ],
+    "active_bank_id": "c4267368-bee3-47f9-add5-cd5de513821b"
+  }
+}

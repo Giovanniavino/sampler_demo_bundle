@@ -19,12 +19,14 @@ from PyQt6.QtCore import (
     QUrl, pyqtProperty, pyqtSignal, pyqtSlot,
 )
 
+from app.audio.dsp.effects import EffectsChain
 from app.audio.playback.engine import SounddevicePlaybackEngine
 from app.audio.separation.heuristic import HeuristicSeparator
 from app.audio.separation.separator import DemucsSeparator, DummySeparator
 from app.audio.slicing.pad_assigner import CATEGORY_COLORS
 from app.audio.metronome import Metronome
 from app.audio.recording import Recorder, Player, RecordedSequence
+from app.hardware.device_sync import DeviceManager
 from app.core.models import Pad, PadMode, Project, Sample, SampleCategory
 from app.core.settings import (
     DRUM_PRESETS, LOOP_PRESETS, VOCAL_PRESETS, AppSettings,
@@ -34,6 +36,22 @@ from app.services.pipeline import SamplerPipeline
 log = logging.getLogger(__name__)
 
 SETTINGS_PATH = Path("data/settings.json")
+
+
+def _default_fx_state() -> dict:
+    """Default per-chain effect parameters (mirrors EffectsChain defaults)."""
+    return {
+        "eq":     {"enabled": False, "low_gain_db": 0.0,
+                   "mid_gain_db": 0.0, "high_gain_db": 0.0},
+        "comp":   {"enabled": False, "threshold_db": -18.0, "ratio": 4.0,
+                   "attack_ms": 10.0, "release_ms": 120.0, "makeup_db": 0.0},
+        "reverb": {"enabled": False, "room_size": 0.7, "damping": 0.4,
+                   "wet": 0.35, "dry": 0.70, "width": 1.0},
+        "delay":  {"enabled": False, "time_ms": 300.0,
+                   "feedback": 0.35, "mix": 0.30},
+        "chorus": {"enabled": False, "rate_hz": 0.8,
+                   "depth_ms": 4.0, "mix": 0.40},
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -72,7 +90,7 @@ class PadGridModel(QAbstractListModel):
         p = self._pads[index.row()]
         if role == self.IndexRole:      return p.index
         if role == self.LabelRole:      return p.label or f"Pad {p.index + 1}"
-        if role == self.ColorRole:      return p.color
+        if role == self.ColorRole:      return p.color or "#888888"
         if role == self.HasSampleRole:  return p.sample_id is not None
         if role == self.ActiveRole:     return p.index in self._active
         if role == self.ModeRole:       return p.mode.value
@@ -318,6 +336,7 @@ class SamplerController(QObject):
     currentSampleChanged        = pyqtSignal()
     editorParamsChanged         = pyqtSignal()
     zoomChanged                 = pyqtSignal()
+    fxChanged                   = pyqtSignal()
     # New signals
     midiKeyboardsDetected       = pyqtSignal()
     midiKeyboardSelected        = pyqtSignal()
@@ -332,6 +351,10 @@ class SamplerController(QObject):
     recordStateChanged          = pyqtSignal()
     playerStateChanged          = pyqtSignal()
     sequenceUpdated             = pyqtSignal()
+    bounceStateChanged          = pyqtSignal()
+    looperStateChanged          = pyqtSignal()
+    looperBarsChanged           = pyqtSignal()
+    deviceStateChanged          = pyqtSignal()
     # NEW: Stem Browser
     browserStemsChanged         = pyqtSignal()
     browserSelectionChanged     = pyqtSignal()
@@ -350,6 +373,8 @@ class SamplerController(QObject):
         self._pad_model = PadGridModel()
         self._import_thread: Optional[QThread] = None
         self._hold_looping: dict[int, bool] = {}
+        # Pads with a LOOP voice currently running (drives tap-to-toggle).
+        self._looping_pads: set[int] = set()
         self._trigger_time_samples: dict[int, int] = {}
         self._trigger_sample_len: dict[int, int] = {}
         self._trigger_wallclock: dict[int, float] = {}
@@ -428,6 +453,36 @@ class SamplerController(QObject):
         self._is_downbeat: bool = False
         self._quantize_percent: float = 0.0  # 0 = no quantize
 
+        # NEW: per-pad + master effect state. Source of truth: pushed to the
+        # engine, and used to build chains for offline export.
+        self._pad_fx: dict[int, dict] = {}
+        self._master_fx: dict = _default_fx_state()
+        self._pending_bounce = None       # last live bounce, awaiting save
+        # NEW: per-track looper mirror (updated by the position-timer poll).
+        self._looper_bars: int = 4
+        self._loop_preroll_ms: float = 40.0   # see engine.set_loop_preroll_ms
+        self._looper_states: list[str] = ["idle"] * 4
+        self._looper_positions: list[float] = [0.0] * 4
+        self._looper_undo_available: list[bool] = [False] * 4
+        self._track_armed_record: list[bool] = [False] * 4
+        self._track_armed_overdub: list[bool] = [False] * 4
+        self._last_modified_track: int = 0
+
+        # NEW: virtual hardware device sync (see app.hardware.virtual_device).
+        self._device_manager = DeviceManager(cache_dir=cache_dir, parent=self)
+        self._device_manager.connectionChanged.connect(
+            self._on_device_connection_changed)
+        self._device_manager.errorOccurred.connect(self._on_device_error)
+        self._device_kits: list[str] = []
+        self._device_presets: list[str] = []
+        self._device_storage: dict = {
+            "total": 0, "free": 0, "used": 0, "sd_path": ""}
+        self._device_log: list[str] = []
+
+        # Last-known set of pads with an active voice (drives auto-dim via
+        # the 30 Hz position timer — see _update_playback_position).
+        self._active_pads_state: set[int] = set()
+
         self._rebuild_engine()
 
         # Inject engine into metronome so it can play clicks
@@ -477,6 +532,7 @@ class SamplerController(QObject):
                 self._set_status(
                     "No working audio device found. Check your settings."
                 )
+        self._apply_all_fx_to_engine()
 
     def _build_pipeline(self) -> SamplerPipeline:
         from app.audio.slicing.auto_slicer import AutoSlicer
@@ -651,6 +707,11 @@ class SamplerController(QObject):
     def currentSampleCutoffHz(self):
         s = self._current_sample()
         return float(getattr(s, "cutoff_hz", 20000.0)) if s else 20000.0
+
+    @pyqtProperty(float, notify=editorParamsChanged)
+    def currentSampleHighpassHz(self):
+        s = self._current_sample()
+        return float(getattr(s, "highpass_hz", 20.0)) if s else 20.0
 
     @pyqtProperty(float, notify=editorParamsChanged)
     def currentSamplePan(self):
@@ -917,6 +978,42 @@ class SamplerController(QObject):
             if abs(bpos - self._browser_playhead_frac) > 0.001 or not found:
                 self._browser_playhead_frac = max(0.0, min(1.0, bpos))
                 self.browserPlayheadChanged.emit()
+
+        # Sync pad active state with the actual engine voices so a one-shot
+        # pad stays lit for the full duration of its sample (and loop / hold
+        # pads dim within ~33 ms of their voice ending).
+        try:
+            active_now = {v.pad_index
+                          for v in self.engine._voices
+                          if v.active and v.pad_index >= 0}
+        except Exception:
+            active_now = set()
+        prev = self._active_pads_state
+        for idx in active_now - prev:
+            self._pad_model.set_active(idx, True)
+        for idx in prev - active_now:
+            self._pad_model.set_active(idx, False)
+        self._active_pads_state = active_now
+
+        # Mirror the engine's per-track looper state on the UI thread so
+        # QML can react via notify signals.
+        eng = getattr(self, "engine", None)
+        if eng is not None:
+            changed = False
+            for i in range(4):
+                new_state = eng.looper_track_state(i)
+                new_pos = eng.looper_track_position(i)
+                new_undo = eng.looper_track_has_undo(i)
+                if (new_state != self._looper_states[i]
+                        or abs(new_pos - self._looper_positions[i]) > 0.005
+                        or new_undo != self._looper_undo_available[i]):
+                    self._looper_states[i] = new_state
+                    self._looper_positions[i] = new_pos
+                    self._looper_undo_available[i] = new_undo
+                    changed = True
+            if changed:
+                self.looperStateChanged.emit()
+
     @pyqtProperty(list, notify=currentSampleChanged)
     def currentSampleBeats(self):
         """Beat positions as fractions of the VIEW WINDOW (for grid overlay)."""
@@ -1203,8 +1300,20 @@ class SamplerController(QObject):
         if not pad.sample_id: return
         sample = self._project.sample_by_id(pad.sample_id)
         if not sample: return
+        # LOOP pads toggle: tapping a running loop stops it instead of
+        # stacking another overlapping loop voice.
+        if pad.mode == PadMode.LOOP and pad_index in self._looping_pads:
+            self.engine.stop_pad(pad_index)
+            self._looping_pads.discard(pad_index)
+            self._pad_model.set_active(pad_index, False)
+            self._set_current_pad(pad_index)
+            if self._recorder.is_recording:
+                self._recorder.log_release(pad_index)
+            return
         self.engine.trigger_pad(pad, sample)
         self._pad_model.set_active(pad_index, True)
+        if pad.mode == PadMode.LOOP:
+            self._looping_pads.add(pad_index)
         self._hold_looping[pad_index] = False
         import time
         self._trigger_wallclock[pad_index] = time.monotonic()
@@ -1218,16 +1327,22 @@ class SamplerController(QObject):
     def releasePad(self, pad_index: int):
         if not self._project: return
         bank = self._project.active_bank()
-        if not bank: return
+        if not bank or not (0 <= pad_index < len(bank.pads)): return
         pad = bank.pads[pad_index]
+        # LOOP pads are toggled by triggerPad — finger-up does nothing,
+        # the loop keeps running until the pad is tapped again.
+        if pad.mode == PadMode.LOOP:
+            return
         if self._settings.playback.press_hold_loop:
             if self._hold_looping.get(pad_index):
                 self.engine.release_pad(pad)
                 self._hold_looping[pad_index] = False
         if pad.mode in (PadMode.HOLD, PadMode.GATE):
             self.engine.release_pad(pad)
-        self._pad_model.set_active(pad_index, False)
-        # NEW: log event for recording
+            self._pad_model.set_active(pad_index, False)
+        # ONE_SHOT: don't dim here — the position timer turns off the light
+        # when the voice actually ends, so the pad stays lit for the full
+        # sample (Serato-style visual feedback).
         if self._recorder.is_recording:
             self._recorder.log_release(pad_index)
 
@@ -1264,6 +1379,7 @@ class SamplerController(QObject):
         for p in (self._project.active_bank().pads if self._project else []):
             self._pad_model.set_active(p.index, False)
         self._hold_looping.clear()
+        self._looping_pads.clear()
 
     @pyqtSlot(int)
     def stopPad(self, pad_index: int):
@@ -1286,6 +1402,7 @@ class SamplerController(QObject):
             log.warning("stopPad failed: %s", e)
         self._pad_model.set_active(pad_index, False)
         self._hold_looping[pad_index] = False
+        self._looping_pads.discard(pad_index)
 
     @pyqtSlot(int)
     def cyclePadMode(self, pad_index: int):
@@ -1294,9 +1411,12 @@ class SamplerController(QObject):
         if not bank or not (0 <= pad_index < len(bank.pads)): return
         pad = bank.pads[pad_index]
         if not pad.sample_id: return
-        pad.mode = PadMode.LOOP if pad.mode == PadMode.ONE_SHOT else PadMode.ONE_SHOT
+        cycle = [PadMode.ONE_SHOT, PadMode.LOOP, PadMode.HOLD, PadMode.GATE]
+        idx = cycle.index(pad.mode) if pad.mode in cycle else 0
+        pad.mode = cycle[(idx + 1) % len(cycle)]
         self.engine.release_pad(pad)
         self._pad_model.notify_mode_changed(pad_index)
+        self._sync_loop_ready(pad)
         self._set_status(f"Pad {pad_index + 1}: {pad.mode.value}")
 
     @pyqtSlot(int, str)
@@ -1310,6 +1430,7 @@ class SamplerController(QObject):
         pad.mode = new_mode
         self.engine.release_pad(pad)
         self._pad_model.notify_mode_changed(pad_index)
+        self._sync_loop_ready(pad)
 
     # ---- QML slots — sample editor -----------
 
@@ -1399,6 +1520,11 @@ class SamplerController(QObject):
     def setCurrentSampleCutoff(self, hz: float):
         clamped = max(20.0, min(20000.0, float(hz)))
         self._apply_to_current(lambda s: setattr(s, "cutoff_hz", clamped))
+
+    @pyqtSlot(float)
+    def setCurrentSampleHighpass(self, hz: float):
+        clamped = max(20.0, min(20000.0, float(hz)))
+        self._apply_to_current(lambda s: setattr(s, "highpass_hz", clamped))
 
     @pyqtSlot(float)
     def setCurrentSamplePan(self, pan: float):
@@ -1943,6 +2069,18 @@ class SamplerController(QObject):
         self._current_beat = int(beat_index)
         self._is_downbeat = bool(is_downbeat)
         self.beatTick.emit(self._current_beat, self._is_downbeat)
+        # On the downbeat, fire any armed loop track (record or overdub)
+        # so the take always lands on a bar boundary.
+        if is_downbeat:
+            for i in range(4):
+                if self._track_armed_record[i]:
+                    self.engine.looper_start_record(i)
+                    self._track_armed_record[i] = False
+                    self._last_modified_track = i
+                elif self._track_armed_overdub[i]:
+                    self.engine.looper_start_overdub(i)
+                    self._track_armed_overdub[i] = False
+                    self._last_modified_track = i
 
     def _on_count_in_done(self):
         # Count-in finished: stop metronome (unless user wanted it on)
@@ -1978,6 +2116,8 @@ class SamplerController(QObject):
             return
         self.engine.trigger_pad(pad, sample)
         self._pad_model.set_active(pad_index, True)
+        if pad.mode == PadMode.LOOP:
+            self._looping_pads.add(pad_index)
 
     def _playback_release(self, pad_index: int):
         """Called by Player for each recorded NOTE_OFF event."""
@@ -1987,7 +2127,11 @@ class SamplerController(QObject):
         if not bank or not (0 <= pad_index < len(bank.pads)):
             return
         pad = bank.pads[pad_index]
-        self.engine.release_pad(pad)
+        if pad.mode == PadMode.LOOP:
+            self.engine.stop_pad(pad_index)
+            self._looping_pads.discard(pad_index)
+        else:
+            self.engine.release_pad(pad)
         self._pad_model.set_active(pad_index, False)
 
     def _effective_bpm(self) -> float:
@@ -2239,10 +2383,19 @@ class SamplerController(QObject):
 
     def _on_imported(self, project: Project):
         self._project = project
+        self._looping_pads.clear()
+        # Mark loop-pad samples as loop_ready *before* rendering so the
+        # first render already skips the seam-killing user fades.
+        bank = project.active_bank()
+        if bank:
+            for p in bank.pads:
+                if p.sample_id and p.mode == PadMode.LOOP:
+                    s = project.sample_by_id(p.sample_id)
+                    if s is not None:
+                        s.loop_ready = True
         self.engine.load_stems(project.stems)
         for s in project.samples:
             self.engine.register_sample(s)
-        bank = project.active_bank()
         if bank:
             self._pad_model.set_pads(bank.pads)
         if project.analyses:
@@ -2293,6 +2446,7 @@ class SamplerController(QObject):
             "fade_in_samples":   getattr(sample, "fade_in_samples", 0),
             "fade_out_samples":  getattr(sample, "fade_out_samples", 0),
             "cutoff_hz":         getattr(sample, "cutoff_hz", 20000.0),
+            "highpass_hz":       getattr(sample, "highpass_hz", 20.0),
             "pan":               getattr(sample, "pan", 0.0),
             "loop_beats":        getattr(sample, "loop_beats", 0),
         }
@@ -2311,6 +2465,7 @@ class SamplerController(QObject):
             self._auto_load_annotations_for_current()
         self.currentSampleChanged.emit()
         self.editorParamsChanged.emit()
+        self.fxChanged.emit()
 
     def _auto_load_annotations_for_current(self):
         """Load (or compute & cache) annotations for the current sample's stem."""
@@ -2504,6 +2659,618 @@ class SamplerController(QObject):
             self._remap_annotations_to_view(s2.source_stem_id)
         self.editorParamsChanged.emit()
         self.currentSampleChanged.emit()
+
+    # ===================================================================
+    # NEW: Effects (per-pad insert chains + master) & audio export
+    # ===================================================================
+
+    def _get_pad_fx(self, pad_index: int) -> dict:
+        """Effect state for a pad, created from defaults on first access."""
+        state = self._pad_fx.get(pad_index)
+        if state is None:
+            state = _default_fx_state()
+            self._pad_fx[pad_index] = state
+        return state
+
+    def _build_chain(self, state: dict) -> EffectsChain:
+        """Build a configured EffectsChain from a saved fx-state dict."""
+        chain = EffectsChain(self._settings.playback.sample_rate)
+        for effect, params in state.items():
+            for key, value in params.items():
+                if key == "enabled":
+                    chain.set_enabled(effect, bool(value))
+                else:
+                    chain.set_param(effect, key, float(value))
+        return chain
+
+    def _apply_all_fx_to_engine(self):
+        """Push the full effect state to the (possibly rebuilt) engine."""
+        eng = getattr(self, "engine", None)
+        if eng is None:
+            return
+        for pad_index, state in self._pad_fx.items():
+            for effect, params in state.items():
+                for key, value in params.items():
+                    if key == "enabled":
+                        eng.set_pad_effect_enabled(pad_index, effect,
+                                                   bool(value))
+                    else:
+                        eng.set_pad_effect_param(pad_index, effect, key,
+                                                 float(value))
+        for effect, params in self._master_fx.items():
+            for key, value in params.items():
+                if key == "enabled":
+                    eng.set_master_effect_enabled(effect, bool(value))
+                else:
+                    eng.set_master_effect_param(effect, key, float(value))
+
+    @pyqtProperty("QVariantMap", notify=fxChanged)
+    def currentPadFx(self):
+        """Effect state of the currently selected pad (for the FX panel)."""
+        if self._current_pad_index < 0:
+            return _default_fx_state()
+        return self._get_pad_fx(self._current_pad_index)
+
+    @pyqtProperty("QVariantMap", notify=fxChanged)
+    def masterFx(self):
+        return self._master_fx
+
+    @pyqtProperty(int, notify=fxChanged)
+    def fxPadIndex(self):
+        return self._current_pad_index
+
+    @pyqtSlot(str, bool)
+    def setPadFxEnabled(self, effect: str, enabled: bool):
+        if self._current_pad_index < 0:
+            return
+        state = self._get_pad_fx(self._current_pad_index)
+        if effect in state:
+            state[effect]["enabled"] = bool(enabled)
+            self.engine.set_pad_effect_enabled(
+                self._current_pad_index, effect, bool(enabled))
+            self.fxChanged.emit()
+
+    @pyqtSlot(str, str, float)
+    def setPadFxParam(self, effect: str, param: str, value: float):
+        if self._current_pad_index < 0:
+            return
+        state = self._get_pad_fx(self._current_pad_index)
+        if effect in state and param in state[effect]:
+            state[effect][param] = float(value)
+            self.engine.set_pad_effect_param(
+                self._current_pad_index, effect, param, float(value))
+            self.fxChanged.emit()
+
+    @pyqtSlot(str, bool)
+    def setMasterFxEnabled(self, effect: str, enabled: bool):
+        if effect in self._master_fx:
+            self._master_fx[effect]["enabled"] = bool(enabled)
+            self.engine.set_master_effect_enabled(effect, bool(enabled))
+            self.fxChanged.emit()
+
+    @pyqtSlot(str, str, float)
+    def setMasterFxParam(self, effect: str, param: str, value: float):
+        if effect in self._master_fx and param in self._master_fx[effect]:
+            self._master_fx[effect][param] = float(value)
+            self.engine.set_master_effect_param(effect, param, float(value))
+            self.fxChanged.emit()
+
+    @pyqtSlot()
+    def resetCurrentPadFx(self):
+        """Reset the selected pad's effects to defaults."""
+        if self._current_pad_index < 0:
+            return
+        self._pad_fx[self._current_pad_index] = _default_fx_state()
+        self._apply_all_fx_to_engine()
+        self.fxChanged.emit()
+        self._set_status(
+            f"Effects reset for pad {self._current_pad_index + 1}")
+
+    @pyqtProperty(bool, notify=sequenceUpdated)
+    def canExportSequence(self):
+        seq = self._player._sequence
+        return bool(seq and seq.events)
+
+    @pyqtProperty(bool, notify=bounceStateChanged)
+    def isBouncing(self):
+        eng = getattr(self, "engine", None)
+        return bool(eng and eng.is_capturing)
+
+    @pyqtSlot(str)
+    def exportSequenceToFile(self, file_url: str):
+        """Render the recorded sequence offline and write it to a WAV file."""
+        seq = self._player._sequence
+        if not seq or not seq.events:
+            self._set_status("No sequence to export")
+            return
+        if not self._project:
+            self._set_status("No project loaded")
+            return
+        bank = self._project.active_bank()
+        pads = bank.pads if bank else []
+        path = self._export_path(file_url)
+        from app.audio.export.exporter import render_sequence, write_wav
+        try:
+            pad_chains = {idx: self._build_chain(self._get_pad_fx(idx))
+                          for idx in self._pad_fx}
+            master_chain = self._build_chain(self._master_fx)
+            audio = render_sequence(
+                seq, self.engine.sample_buffers, pads,
+                self._settings.playback.sample_rate,
+                pad_chains, master_chain,
+            )
+            write_wav(path, audio, self._settings.playback.sample_rate)
+            self._set_status(f"Exported sequence → {path.name}")
+        except Exception as e:
+            log.error("Sequence export failed: %s", e)
+            self._set_status(f"Export failed: {e}")
+
+    @pyqtSlot()
+    def startBounce(self):
+        """Start capturing the live audio output to memory."""
+        eng = getattr(self, "engine", None)
+        if eng is None:
+            return
+        eng.start_capture()
+        self._set_status("● Bouncing live output…")
+        self.bounceStateChanged.emit()
+
+    @pyqtSlot()
+    def stopBounce(self):
+        """Stop the live bounce; the captured audio is held until saved."""
+        eng = getattr(self, "engine", None)
+        if eng is None:
+            return
+        self._pending_bounce = eng.stop_capture()
+        self.bounceStateChanged.emit()
+        if self._pending_bounce is None or len(self._pending_bounce) == 0:
+            self._set_status("Bounce was empty — nothing captured")
+            return
+        secs = len(self._pending_bounce) / max(
+            1, self._settings.playback.sample_rate)
+        self._set_status(
+            f"Bounce stopped ({secs:.1f}s) — choose where to save")
+
+    @pyqtSlot(str)
+    def saveBounceToFile(self, file_url: str):
+        """Write the most recent live bounce to a WAV file."""
+        if self._pending_bounce is None or len(self._pending_bounce) == 0:
+            self._set_status("No bounce to save")
+            return
+        path = self._export_path(file_url)
+        from app.audio.export.exporter import write_wav
+        try:
+            write_wav(path, self._pending_bounce,
+                      self._settings.playback.sample_rate)
+            self._set_status(f"Bounce saved → {path.name}")
+        except Exception as e:
+            log.error("Bounce save failed: %s", e)
+            self._set_status(f"Bounce save failed: {e}")
+
+    @staticmethod
+    def _export_path(file_url: str) -> Path:
+        path = SamplerController._qml_file_to_path(file_url)
+        if path.suffix.lower() != ".wav":
+            path = path.with_suffix(".wav")
+        return path
+
+    # ===================================================================
+    # NEW: Virtual device (kits + presets) sync
+    # ===================================================================
+
+    def _on_device_connection_changed(self):
+        if self._device_manager.is_connected():
+            self._device_log_add("Connected to device")
+            self._refresh_device_lists()
+        else:
+            self._device_log_add("Disconnected from device")
+        self.deviceStateChanged.emit()
+
+    def _on_device_error(self, msg: str):
+        self._device_log_add(f"Error: {msg}")
+        self.deviceStateChanged.emit()
+
+    def _device_log_add(self, msg: str):
+        self._device_log.insert(0, msg)
+        del self._device_log[12:]
+
+    def _refresh_device_lists(self):
+        self._device_kits = self._device_manager.list_kits()
+        self._device_presets = self._device_manager.list_presets()
+        self._device_storage = self._device_manager.get_storage_info()
+
+    def _apply_preset(self, pad_cfgs: list[dict]):
+        """Apply a preset's pad config (mode / color / label / group)."""
+        if not self._project:
+            return
+        bank = self._project.active_bank()
+        if not bank:
+            return
+        by_index = {p.index: p for p in bank.pads}
+        for cfg in pad_cfgs:
+            pad = by_index.get(cfg.get("index"))
+            if pad is None:
+                continue
+            try:
+                pad.mode = PadMode(cfg.get("mode", pad.mode.value))
+            except (ValueError, TypeError):
+                pass
+            pad.color = cfg.get("color", pad.color)
+            pad.label = cfg.get("label", pad.label)
+            pad.group = int(cfg.get("group", pad.group) or 0)
+            pad.choke_self = bool(cfg.get("choke_self", pad.choke_self))
+        self._pad_model.set_pads(bank.pads)
+
+    @pyqtProperty(bool, notify=deviceStateChanged)
+    def deviceConnected(self):
+        return self._device_manager.is_connected()
+
+    @pyqtProperty(str, notify=deviceStateChanged)
+    def deviceSdPath(self):
+        return self._device_storage.get("sd_path", "")
+
+    @pyqtProperty(list, notify=deviceStateChanged)
+    def deviceKits(self):
+        return self._device_kits
+
+    @pyqtProperty(list, notify=deviceStateChanged)
+    def devicePresets(self):
+        return self._device_presets
+
+    @pyqtProperty(list, notify=deviceStateChanged)
+    def deviceLog(self):
+        return self._device_log
+
+    @pyqtProperty(str, notify=deviceStateChanged)
+    def deviceStorageText(self):
+        s = self._device_storage
+        total = s.get("total", 0)
+        if not total:
+            return "—"
+        gb = 1024 ** 3
+        return (f"{s.get('used', 0) / gb:.2f} GB used  /  "
+                f"{s.get('free', 0) / gb:.1f} GB free")
+
+    @pyqtProperty(float, notify=deviceStateChanged)
+    def deviceStorageFraction(self):
+        total = self._device_storage.get("total", 0)
+        if not total:
+            return 0.0
+        return max(0.0, min(1.0,
+            self._device_storage.get("used", 0) / total))
+
+    @pyqtSlot()
+    def connectDevice(self):
+        if self._device_manager.connect():
+            self._set_status("Device connected")
+        else:
+            self._set_status(
+                "Device not found — is virtual_device running?")
+
+    @pyqtSlot()
+    def disconnectDevice(self):
+        self._device_manager.disconnect()
+
+    @pyqtSlot()
+    def refreshDevice(self):
+        if not self._device_manager.is_connected():
+            return
+        self._refresh_device_lists()
+        self.deviceStateChanged.emit()
+
+    @pyqtSlot(str)
+    def pushCurrentProjectToDevice(self, kit_name: str):
+        if not self._project:
+            self._set_status("No project to push")
+            return
+        name = (kit_name or "").strip() or (self._project.name or "kit")
+        if self._device_manager.push_kit(name, self._project):
+            self._device_log_add(f"Kit '{name}' pushed")
+            self._set_status(f"Kit '{name}' pushed to device")
+            self._refresh_device_lists()
+        else:
+            self._set_status("Kit push failed")
+        self.deviceStateChanged.emit()
+
+    @pyqtSlot(str)
+    def loadKitFromDevice(self, kit_name: str):
+        project = self._device_manager.load_kit(kit_name)
+        if project is None:
+            self._set_status(f"Could not load kit '{kit_name}'")
+            return
+        self._on_imported(project)
+        self._device_log_add(f"Kit '{kit_name}' loaded")
+        self.deviceStateChanged.emit()
+
+    @pyqtSlot(str)
+    def deleteKitFromDevice(self, kit_name: str):
+        if self._device_manager.delete_kit(kit_name):
+            self._device_log_add(f"Kit '{kit_name}' deleted")
+            self._refresh_device_lists()
+        self.deviceStateChanged.emit()
+
+    @pyqtSlot(str)
+    def savePresetToDevice(self, name: str):
+        if not self._project:
+            self._set_status("No project loaded")
+            return
+        bank = self._project.active_bank()
+        if not bank:
+            self._set_status("No pads to save")
+            return
+        nm = (name or "").strip() or "preset"
+        if self._device_manager.save_preset(nm, bank.pads):
+            self._device_log_add(f"Preset '{nm}' saved")
+            self._refresh_device_lists()
+        self.deviceStateChanged.emit()
+
+    @pyqtSlot(str)
+    def loadPresetFromDevice(self, name: str):
+        pads = self._device_manager.load_preset(name)
+        if not pads:
+            self._set_status(f"Preset '{name}' is empty")
+            return
+        self._apply_preset(pads)
+        self._device_log_add(f"Preset '{name}' applied")
+        self._set_status(f"Preset '{name}' applied")
+
+    @pyqtSlot()
+    def openDeviceSd(self):
+        self._device_manager.open_sd_in_explorer()
+
+    # ===================================================================
+    # NEW: Pad behavior (mode / choke group / self-choke)
+    # ===================================================================
+
+    def _current_pad(self):
+        if not self._project or self._current_pad_index < 0:
+            return None
+        bank = self._project.active_bank()
+        if not bank or self._current_pad_index >= len(bank.pads):
+            return None
+        return bank.pads[self._current_pad_index]
+
+    def _sync_loop_ready(self, pad):
+        """Match sample.loop_ready to pad.mode == LOOP and re-render if needed.
+
+        A loop-ready sample is rendered without the longer user fade-in /
+        fade-out so the loop seam doesn't dip into near-silence.
+        """
+        if not pad or not pad.sample_id or not self._project:
+            return
+        sample = self._project.sample_by_id(pad.sample_id)
+        if sample is None:
+            return
+        want = (pad.mode == PadMode.LOOP)
+        if getattr(sample, "loop_ready", False) == want:
+            return
+        sample.loop_ready = want
+        try:
+            self.engine.register_sample(sample)
+        except Exception as e:
+            log.warning("loop_ready re-render failed: %s", e)
+
+    @pyqtProperty(str, notify=currentSampleChanged)
+    def currentPadMode(self):
+        pad = self._current_pad()
+        return pad.mode.value if pad else "one_shot"
+
+    @pyqtProperty(int, notify=currentSampleChanged)
+    def currentPadGroup(self):
+        pad = self._current_pad()
+        return pad.group if pad else 0
+
+    @pyqtProperty(bool, notify=currentSampleChanged)
+    def currentPadChokeSelf(self):
+        pad = self._current_pad()
+        return getattr(pad, "choke_self", False) if pad else False
+
+    @pyqtSlot(str)
+    def setCurrentPadMode(self, mode_value: str):
+        pad = self._current_pad()
+        if pad is None:
+            return
+        try:
+            new_mode = PadMode(mode_value)
+        except ValueError:
+            return
+        pad.mode = new_mode
+        self._pad_model.notify_mode_changed(pad.index)
+        # Leaving LOOP — drop the looping bookkeeping for this pad.
+        if new_mode != PadMode.LOOP:
+            self._looping_pads.discard(pad.index)
+        # Re-render the sample as loop-ready (or not) for a seamless seam.
+        self._sync_loop_ready(pad)
+        self.currentSampleChanged.emit()
+
+    @pyqtSlot(int)
+    def setCurrentPadGroup(self, group: int):
+        pad = self._current_pad()
+        if pad is None:
+            return
+        pad.group = max(0, int(group))
+        self.currentSampleChanged.emit()
+
+    @pyqtSlot(bool)
+    def setCurrentPadChokeSelf(self, value: bool):
+        pad = self._current_pad()
+        if pad is None:
+            return
+        pad.choke_self = bool(value)
+        self.currentSampleChanged.emit()
+
+    # ---- Loop sync to BPM grid ----------------------------------------
+
+    @pyqtProperty(int, notify=currentSampleChanged)
+    def currentSampleLoopBeats(self):
+        s = self._current_sample()
+        return getattr(s, "loop_beats", 0) if s else 0
+
+    @pyqtSlot(int)
+    def setCurrentSampleLoopBeats(self, beats: int):
+        s = self._current_sample()
+        if s is None:
+            return
+        s.loop_beats = max(0, int(beats))
+        try:
+            self.engine.register_sample(s)
+        except Exception as e:
+            log.warning("loop_beats re-render failed: %s", e)
+        self.currentSampleChanged.emit()
+        self.editorParamsChanged.emit()
+
+    @pyqtSlot()
+    def autoDetectLoopBeats(self):
+        s = self._current_sample()
+        if s is None:
+            return
+        bpm = self._effective_bpm()
+        if bpm <= 0:
+            self._set_status("Can't auto-detect: project BPM is unknown")
+            return
+        sr = self._settings.playback.sample_rate
+        suggested = SounddevicePlaybackEngine.suggest_loop_beats(
+            s.length_samples, sr, bpm)
+        if suggested > 0:
+            s.loop_beats = int(suggested)
+            try:
+                self.engine.register_sample(s)
+            except Exception as e:
+                log.warning("loop_beats re-render failed: %s", e)
+            self._set_status(f"Auto loop sync: {suggested} beats")
+            self.currentSampleChanged.emit()
+            self.editorParamsChanged.emit()
+
+    # ===================================================================
+    # NEW: Bar-locked looper (captures master, replays in tempo)
+    # ===================================================================
+
+    @pyqtProperty(int, notify=looperBarsChanged)
+    def looperBars(self):
+        return self._looper_bars
+
+    @pyqtProperty(list, notify=looperStateChanged)
+    def looperStates(self):
+        return list(self._looper_states)
+
+    @pyqtProperty(list, notify=looperStateChanged)
+    def looperPositionFracs(self):
+        return list(self._looper_positions)
+
+    @pyqtProperty(list, notify=looperStateChanged)
+    def looperUndoAvailable(self):
+        return list(self._looper_undo_available)
+
+    @pyqtSlot(int)
+    def setLooperBars(self, n: int):
+        n = max(1, min(32, int(n)))
+        if n == self._looper_bars:
+            return
+        self._looper_bars = n
+        self.looperBarsChanged.emit()
+
+    @pyqtProperty(float, notify=looperBarsChanged)
+    def loopPrerollMs(self):
+        return self._loop_preroll_ms
+
+    @pyqtSlot(float)
+    def setLoopPrerollMs(self, ms: float):
+        """Compensation for trigger latency: how many ms of recent master
+        history to splice into the loop's start when recording fires."""
+        ms = max(0.0, min(100.0, float(ms)))
+        if abs(ms - self._loop_preroll_ms) < 0.5:
+            return
+        self._loop_preroll_ms = ms
+        eng = getattr(self, "engine", None)
+        if eng is not None:
+            eng.set_loop_preroll_ms(ms)
+        self.looperBarsChanged.emit()
+
+    def _ensure_metronome_for_loop(self) -> bool:
+        """Make sure metronome + BPM are usable before arming a loop track."""
+        bpm = self._effective_bpm()
+        if bpm <= 0:
+            self._set_status("Looper needs a BPM — load a track first")
+            return False
+        if not self._metronome.enabled:
+            self._metronome.set_bpm(bpm)
+            self._metronome.start()
+            self.metronomeStateChanged.emit()
+        self.engine.looper_configure(self._looper_bars, bpm, 4)
+        return True
+
+    @pyqtSlot(int)
+    def toggleLooperTrack(self, idx: int):
+        """One-tap cycle on a single track's button.
+
+        - idle           -> arm record (fires on next downbeat)
+        - playing        -> arm overdub (adds a layer on next downbeat)
+        - overdub        -> stop overdub (keep the layer just added)
+        - armed_*        -> cancel
+        - recording      -> cancel (drop the partial take)
+        """
+        if not (0 <= idx < 4):
+            return
+        state = self._looper_states[idx]
+        if state == "idle":
+            if not self._ensure_metronome_for_loop():
+                return
+            self.engine.looper_arm_record(idx)
+            self._track_armed_record[idx] = True
+            self._track_armed_overdub[idx] = False
+            self._set_status(
+                f"T{idx + 1}: armed record — {self._looper_bars} bar(s)")
+        elif state == "playing":
+            if not self._ensure_metronome_for_loop():
+                return
+            self.engine.looper_arm_overdub(idx)
+            self._track_armed_overdub[idx] = True
+            self._track_armed_record[idx] = False
+            self._set_status(f"T{idx + 1}: armed overdub")
+        elif state == "overdub":
+            self.engine.looper_stop_overdub(idx)
+            self._last_modified_track = idx
+            self._set_status(f"T{idx + 1}: overdub stopped")
+        elif state in ("armed_record", "armed_overdub", "recording"):
+            self.engine.looper_cancel(idx)
+            self._track_armed_record[idx] = False
+            self._track_armed_overdub[idx] = False
+            self._set_status(f"T{idx + 1}: cancelled")
+
+    @pyqtSlot(int)
+    def armLooperRecord(self, idx: int):
+        """Explicit re-record: arms RECORD on a track (will overwrite)."""
+        if not (0 <= idx < 4):
+            return
+        if not self._ensure_metronome_for_loop():
+            return
+        self.engine.looper_arm_record(idx)
+        self._track_armed_record[idx] = True
+        self._track_armed_overdub[idx] = False
+        self._set_status(
+            f"T{idx + 1}: re-record armed — {self._looper_bars} bar(s)")
+
+    @pyqtSlot(int)
+    def clearLooperTrack(self, idx: int):
+        if not (0 <= idx < 4):
+            return
+        self.engine.looper_clear(idx)
+        self._track_armed_record[idx] = False
+        self._track_armed_overdub[idx] = False
+        self._set_status(f"T{idx + 1}: cleared")
+
+    @pyqtSlot(int)
+    def undoLooperTrack(self, idx: int):
+        if not (0 <= idx < 4):
+            return
+        self.engine.looper_undo(idx)
+        self._last_modified_track = idx
+        self._set_status(f"T{idx + 1}: undo")
+
+    @pyqtSlot()
+    def undoLooperLast(self):
+        """Undo on the most recently modified track (last take / overdub)."""
+        self.undoLooperTrack(self._last_modified_track)
 
     def _on_import_error(self, msg: str):
         self._set_status(f"Error: {msg}")

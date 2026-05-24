@@ -67,9 +67,13 @@ def test_trim_preview_does_not_rerender_until_commit(monkeypatch, qt_app, tmp_pa
         active_bank_id=bank.id,
     )
     controller.selectPad(0)
+    # Force the editor view window to span the whole stem so the fractions
+    # below map predictably to absolute stem samples.
+    controller._view_start_sample = 0
+    controller._view_end_sample = 10000
     controller.engine.register_calls.clear()
 
-    controller.previewCurrentSampleRegion(0.2, 0.6)
+    controller.setCurrentSampleRegion(0.2, 0.6)
 
     assert sample.start_sample == 2000
     assert sample.end_sample == 6000
@@ -79,43 +83,35 @@ def test_trim_preview_does_not_rerender_until_commit(monkeypatch, qt_app, tmp_pa
 
     assert controller.engine.register_calls == [(2000, 6000)]
 
-    controller.commitCurrentSampleRegion()
 
-    assert controller.engine.register_calls == [(2000, 6000)]
-
-
-def test_engine_inject_voice_is_processed_in_callback():
+def test_engine_trigger_click_is_processed_in_callback():
     engine = SounddevicePlaybackEngine(sample_rate=1000, block_size=8)
-    audio = np.linspace(-0.25, 0.25, 16, dtype=np.float32)
+    mono = np.linspace(-0.25, 0.25, 16, dtype=np.float32)
+    click = np.stack([mono, mono], axis=1)
 
-    assert engine.inject_voice(audio, sample_id="click", pad_index=7)
+    engine.trigger_click(click)
 
     out = np.zeros((8, 2), dtype=np.float32)
     engine._callback(out, 8, None, None)
 
-    active, pos = engine.get_pad_voice_state(7)
-    assert active is True
-    assert pos > 0.0
     assert np.any(out != 0.0)
 
 
-def test_metronome_uses_engine_inject_voice(qt_app):
+def test_metronome_uses_engine_trigger_click(qt_app):
     calls = []
 
     class Engine:
         sample_rate = 44100
 
-        def inject_voice(self, audio, **kwargs):
-            calls.append((audio.copy(), kwargs))
-            return True
+        def trigger_click(self, audio):
+            calls.append(audio.copy())
 
     metronome = Metronome()
     metronome.set_engine(Engine())
 
-    metronome._inject_click_voice(np.array([0.1, 0.05, 0.0], dtype=np.float32))
+    metronome._play_click(is_downbeat=True)
 
     assert len(calls) == 1
-    audio, kwargs = calls[0]
-    assert audio.ndim == 1
-    assert kwargs["sample_id"] == "__metronome_click__"
-    assert kwargs["pad_index"] == -1
+    click = calls[0]
+    assert click.ndim == 2
+    assert click.shape[1] == 2

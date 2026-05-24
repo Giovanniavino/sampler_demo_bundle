@@ -166,8 +166,10 @@ class Sample:
     normalized: bool = False
     # NEW: extended playback parameters
     cutoff_hz: float = 20000.0            # low-pass filter, 20kHz = off
+    highpass_hz: float = 20.0             # high-pass filter, 20Hz = off
     pan: float = 0.0 
     loop_beats: int = 0
+    loop_ready: bool = False              # render without user fades for seamless looping
 
     # Metadata
     bpm: Optional[float] = None
@@ -189,6 +191,7 @@ class Pad:
     label: str = ""
     muted: bool = False
     group: int = 0                        # choke group: pads with same >0 group cut each other
+    choke_self: bool = False              # if True, re-triggering this pad cuts its own previous voice
 
 
 @dataclass

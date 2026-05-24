@@ -31,6 +31,7 @@ ApplicationWindow {
     property int  browserMode: 0
     // Which pad the browser will assign to (-1 = ask)
     property int  browserTargetPad: 0
+    property bool showFx: false
 
     FileDialog {
         id: fileDialog
@@ -49,6 +50,24 @@ ApplicationWindow {
         nameFilters: ["Audio (*.mp3 *.wav *.flac *.ogg *.m4a)"]
         onAccepted: controller.loadSampleFromFile(
             selectedFile.toString(), browserTargetPad)
+    }
+
+    FileDialog {
+        id: exportDialog
+        title: "Export sequence as WAV"
+        fileMode: FileDialog.SaveFile
+        defaultSuffix: "wav"
+        nameFilters: ["WAV (*.wav)"]
+        onAccepted: controller.exportSequenceToFile(selectedFile.toString())
+    }
+
+    FileDialog {
+        id: bounceDialog
+        title: "Save live bounce as WAV"
+        fileMode: FileDialog.SaveFile
+        defaultSuffix: "wav"
+        nameFilters: ["WAV (*.wav)"]
+        onAccepted: controller.saveBounceToFile(selectedFile.toString())
     }
 
     // ════════════════════════════════════════════════════════════════
@@ -193,6 +212,132 @@ ApplicationWindow {
                             showSettings = false
                             showSampleEdit = false
                             if (showBrowser) controller.openStemBrowser()
+                        }
+                    }
+                }
+                Rectangle {
+                    width: 56; height: 24; radius: 12
+                    color: showFx ? cAccent : (fxM.containsMouse ? cCard : cCard)
+                    border.color: cBorder
+                    Text { anchors.centerIn: parent; text: "FX"
+                        color: cText; font.pixelSize: 11; font.bold: true }
+                    MouseArea { id: fxM; anchors.fill: parent
+                        hoverEnabled: true
+                        onClicked: { showFx = !showFx }
+                    }
+                }
+                Rectangle {
+                    width: 70; height: 24; radius: 4
+                    opacity: controller.canExportSequence ? 1.0 : 0.4
+                    color: (exportM.containsMouse && controller.canExportSequence)
+                           ? cAccent : cCard
+                    border.color: cBorder
+                    Text { anchors.centerIn: parent; text: "Export"
+                        color: cText; font.pixelSize: 11; font.bold: true }
+                    MouseArea { id: exportM; anchors.fill: parent
+                        hoverEnabled: true
+                        onClicked: if (controller.canExportSequence) exportDialog.open() }
+                }
+                Rectangle {
+                    width: 78; height: 24; radius: 4
+                    color: controller.isBouncing ? cRed
+                           : (bounceM.containsMouse ? cAccent : cCard)
+                    border.color: cBorder
+                    Text { anchors.centerIn: parent
+                        text: controller.isBouncing ? "■ Stop" : "● Bounce"
+                        color: cText; font.pixelSize: 11; font.bold: true }
+                    MouseArea { id: bounceM; anchors.fill: parent
+                        hoverEnabled: true
+                        onClicked: {
+                            if (controller.isBouncing) {
+                                controller.stopBounce()
+                                bounceDialog.open()
+                            } else {
+                                controller.startBounce()
+                            }
+                        }
+                    }
+                }
+                Repeater {
+                    model: 4
+                    delegate: Rectangle {
+                        id: trackBtn
+                        property int trackIdx: index
+                        property string trackSt: controller.looperStates[trackIdx]
+                        width: 40; height: 24; radius: 4
+                        color: {
+                            if (trackSt === "recording") return cRed
+                            if (trackSt === "overdub") return cYellow
+                            if (trackSt === "armed_record"
+                                    || trackSt === "armed_overdub") return cOrange
+                            if (trackSt === "playing") return cGreen
+                            return trkM.containsMouse ? cAccent : cCard
+                        }
+                        border.color: cBorder
+                        Text { anchors.centerIn: parent
+                            text: "T" + (trackBtn.trackIdx + 1)
+                            color: cText; font.pixelSize: 11; font.bold: true }
+                        MouseArea {
+                            id: trkM
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            acceptedButtons: Qt.LeftButton | Qt.RightButton
+                            onClicked: (mouse) => {
+                                if (mouse.button === Qt.RightButton)
+                                    controller.clearLooperTrack(trackBtn.trackIdx)
+                                else
+                                    controller.toggleLooperTrack(trackBtn.trackIdx)
+                            }
+                        }
+                    }
+                }
+                Rectangle {
+                    width: 28; height: 24; radius: 4
+                    color: undoM.containsMouse ? cAccent : cCard
+                    border.color: cBorder
+                    Text { anchors.centerIn: parent; text: "↶"
+                        color: cText; font.pixelSize: 13; font.bold: true }
+                    MouseArea { id: undoM; anchors.fill: parent
+                        hoverEnabled: true
+                        onClicked: controller.undoLooperLast() }
+                }
+                Rectangle {
+                    width: 22; height: 24; radius: 4
+                    color: lbDecM.containsMouse ? cAccent : cCard
+                    border.color: cBorder
+                    Text { anchors.centerIn: parent; text: "−"
+                        color: cText; font.pixelSize: 13; font.bold: true }
+                    MouseArea { id: lbDecM; anchors.fill: parent
+                        hoverEnabled: true
+                        onClicked: controller.setLooperBars(
+                            controller.looperBars - 1) }
+                }
+                Rectangle {
+                    width: 22; height: 24; radius: 4
+                    color: lbIncM.containsMouse ? cAccent : cCard
+                    border.color: cBorder
+                    Text { anchors.centerIn: parent; text: "+"
+                        color: cText; font.pixelSize: 13; font.bold: true }
+                    MouseArea { id: lbIncM; anchors.fill: parent
+                        hoverEnabled: true
+                        onClicked: controller.setLooperBars(
+                            controller.looperBars + 1) }
+                }
+                Rectangle {
+                    width: 64; height: 24; radius: 4
+                    color: prM.containsMouse ? cAccent : cCard
+                    border.color: cBorder
+                    Text { anchors.centerIn: parent
+                        text: "PR " + Math.round(controller.loopPrerollMs)
+                        color: cText; font.pixelSize: 10; font.bold: true }
+                    MouseArea { id: prM; anchors.fill: parent
+                        hoverEnabled: true
+                        onClicked: {
+                            // Cycle through 0, 20, 40, 60, 80, 100 ms.
+                            var v = Math.round(controller.loopPrerollMs)
+                            var next = v + 20
+                            if (next > 100) next = 0
+                            controller.setLoopPrerollMs(next)
                         }
                     }
                 }
@@ -401,6 +546,263 @@ ApplicationWindow {
     Shortcut {
         sequence: "Ctrl+M"
         onActivated: controller.toggleMetronome()
+    }
+
+    // ════════════════════════════════════════════════════════════════
+    // FX PANEL — per-pad / master insert effects
+    // ════════════════════════════════════════════════════════════════
+    Rectangle {
+        id: fxPanel
+        width: 376
+        radius: 8
+        anchors.top: topBar.bottom
+        anchors.right: parent.right
+        anchors.bottom: parent.bottom
+        anchors.margins: 8
+        color: cPanel
+        border.color: cBorder
+        visible: showFx
+        z: 30
+
+        property bool master: false
+
+        function fxState() {
+            return master ? controller.masterFx : controller.currentPadFx
+        }
+        function fxSetParam(effect, param, value) {
+            if (master) controller.setMasterFxParam(effect, param, value)
+            else controller.setPadFxParam(effect, param, value)
+        }
+        function fxSetEnabled(effect, on) {
+            if (master) controller.setMasterFxEnabled(effect, on)
+            else controller.setPadFxEnabled(effect, on)
+        }
+
+        readonly property var fxSpec: [
+            { key: "eq", name: "EQ", params: [
+                { p: "low_gain_db",  label: "Low dB",  lo: -18, hi: 18,   dec: 1 },
+                { p: "mid_gain_db",  label: "Mid dB",  lo: -18, hi: 18,   dec: 1 },
+                { p: "high_gain_db", label: "High dB", lo: -18, hi: 18,   dec: 1 } ] },
+            { key: "comp", name: "Compressor", params: [
+                { p: "threshold_db", label: "Thresh",  lo: -48, hi: 0,    dec: 1 },
+                { p: "ratio",        label: "Ratio",   lo: 1,   hi: 20,   dec: 1 },
+                { p: "attack_ms",    label: "Attack",  lo: 1,   hi: 100,  dec: 0 },
+                { p: "release_ms",   label: "Release", lo: 20,  hi: 500,  dec: 0 },
+                { p: "makeup_db",    label: "Makeup",  lo: 0,   hi: 18,   dec: 1 } ] },
+            { key: "reverb", name: "Reverb", params: [
+                { p: "room_size",    label: "Size",    lo: 0,   hi: 1,    dec: 2 },
+                { p: "damping",      label: "Damping", lo: 0,   hi: 1,    dec: 2 },
+                { p: "wet",          label: "Wet",     lo: 0,   hi: 1,    dec: 2 },
+                { p: "dry",          label: "Dry",     lo: 0,   hi: 1,    dec: 2 } ] },
+            { key: "delay", name: "Delay", params: [
+                { p: "time_ms",      label: "Time ms", lo: 10,  hi: 1000, dec: 0 },
+                { p: "feedback",     label: "Feedbk",  lo: 0,   hi: 0.95, dec: 2 },
+                { p: "mix",          label: "Mix",     lo: 0,   hi: 1,    dec: 2 } ] },
+            { key: "chorus", name: "Chorus", params: [
+                { p: "rate_hz",      label: "Rate Hz", lo: 0.1, hi: 6,    dec: 2 },
+                { p: "depth_ms",     label: "Depth",   lo: 0.5, hi: 15,   dec: 1 },
+                { p: "mix",          label: "Mix",     lo: 0,   hi: 1,    dec: 2 } ] }
+        ]
+
+        Row {
+            id: fxHeader
+            anchors.top: parent.top
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.margins: 10
+            height: 24
+            spacing: 6
+
+            Text {
+                text: "FX"; color: cText; font.pixelSize: 14; font.bold: true
+                anchors.verticalCenter: parent.verticalCenter
+            }
+            Rectangle {
+                width: 44; height: 22; radius: 4
+                anchors.verticalCenter: parent.verticalCenter
+                color: !fxPanel.master ? cAccent : cCard
+                border.color: cBorder
+                Text { anchors.centerIn: parent; text: "Pad"
+                    color: cText; font.pixelSize: 10 }
+                MouseArea { anchors.fill: parent; onClicked: fxPanel.master = false }
+            }
+            Rectangle {
+                width: 58; height: 22; radius: 4
+                anchors.verticalCenter: parent.verticalCenter
+                color: fxPanel.master ? cAccent : cCard
+                border.color: cBorder
+                Text { anchors.centerIn: parent; text: "Master"
+                    color: cText; font.pixelSize: 10 }
+                MouseArea { anchors.fill: parent; onClicked: fxPanel.master = true }
+            }
+            Text {
+                anchors.verticalCenter: parent.verticalCenter
+                text: fxPanel.master ? "all pads"
+                      : (controller.fxPadIndex >= 0
+                         ? "pad " + (controller.fxPadIndex + 1) : "no pad")
+                color: cMuted; font.pixelSize: 10
+            }
+        }
+
+        Rectangle {
+            id: fxDivider
+            anchors.top: fxHeader.bottom
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.leftMargin: 10
+            anchors.rightMargin: 10
+            anchors.topMargin: 6
+            height: 1
+            color: cBorder
+        }
+
+        Flickable {
+            id: fxFlick
+            anchors.top: fxDivider.bottom
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.bottom: fxFooter.top
+            anchors.margins: 10
+            contentHeight: fxColumn.height
+            clip: true
+            boundsBehavior: Flickable.StopAtBounds
+
+            Column {
+                id: fxColumn
+                width: fxFlick.width
+                spacing: 8
+
+                Repeater {
+                    model: fxPanel.fxSpec
+                    delegate: Rectangle {
+                        id: fxCard
+                        property var effect: modelData
+                        property bool effectOn: {
+                            var st = fxPanel.fxState()[effect.key]
+                            return st ? st.enabled : false
+                        }
+                        width: fxColumn.width
+                        radius: 6
+                        color: cCard
+                        border.color: effectOn ? cAccent : cBorder
+                        height: cardBody.height + 16
+
+                        Column {
+                            id: cardBody
+                            x: 8; y: 8
+                            width: parent.width - 16
+                            spacing: 5
+
+                            Row {
+                                width: parent.width
+                                spacing: 8
+                                Rectangle {
+                                    width: 36; height: 18; radius: 9
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    color: fxCard.effectOn ? cGreen : "#3A3A48"
+                                    Rectangle {
+                                        width: 14; height: 14; radius: 7
+                                        color: "white"; y: 2
+                                        x: fxCard.effectOn ? parent.width - 16 : 2
+                                        Behavior on x { NumberAnimation { duration: 90 } }
+                                    }
+                                    MouseArea {
+                                        anchors.fill: parent
+                                        onClicked: fxPanel.fxSetEnabled(
+                                            fxCard.effect.key, !fxCard.effectOn)
+                                    }
+                                }
+                                Text {
+                                    text: fxCard.effect.name
+                                    color: cText; font.pixelSize: 12; font.bold: true
+                                    anchors.verticalCenter: parent.verticalCenter
+                                }
+                            }
+
+                            Repeater {
+                                model: fxCard.effect.params
+                                delegate: Row {
+                                    id: paramRow
+                                    property var param: modelData
+                                    width: cardBody.width
+                                    height: 22
+                                    spacing: 6
+                                    Text {
+                                        width: 52
+                                        text: paramRow.param.label
+                                        color: cMuted; font.pixelSize: 10
+                                        anchors.verticalCenter: parent.verticalCenter
+                                    }
+                                    Slider {
+                                        id: paramSlider
+                                        width: paramRow.width - 104
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        from: paramRow.param.lo
+                                        to: paramRow.param.hi
+                                        function syncValue() {
+                                            var st = fxPanel.fxState()[fxCard.effect.key]
+                                            if (st !== undefined && st !== null)
+                                                value = st[paramRow.param.p]
+                                        }
+                                        Component.onCompleted: syncValue()
+                                        onMoved: fxPanel.fxSetParam(
+                                            fxCard.effect.key, paramRow.param.p, value)
+                                        Connections {
+                                            target: controller
+                                            function onFxChanged() { paramSlider.syncValue() }
+                                        }
+                                        Connections {
+                                            target: fxPanel
+                                            function onMasterChanged() { paramSlider.syncValue() }
+                                        }
+                                    }
+                                    Text {
+                                        width: 40
+                                        text: paramSlider.value.toFixed(paramRow.param.dec)
+                                        color: cText; font.pixelSize: 10
+                                        horizontalAlignment: Text.AlignRight
+                                        anchors.verticalCenter: parent.verticalCenter
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Row {
+            id: fxFooter
+            anchors.bottom: parent.bottom
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.margins: 10
+            height: 26
+            spacing: 6
+
+            Rectangle {
+                width: 86; height: 24; radius: 4
+                visible: !fxPanel.master
+                color: resetM.containsMouse ? cAccent : cCard
+                border.color: cBorder
+                Text { anchors.centerIn: parent; text: "Reset pad"
+                    color: cText; font.pixelSize: 10 }
+                MouseArea { id: resetM; anchors.fill: parent
+                    hoverEnabled: true
+                    onClicked: controller.resetCurrentPadFx() }
+            }
+            Item { width: 1; height: 1 }
+            Rectangle {
+                width: 64; height: 24; radius: 4
+                color: closeFxM.containsMouse ? cAccent : cCard
+                border.color: cBorder
+                Text { anchors.centerIn: parent; text: "Close"
+                    color: cText; font.pixelSize: 10 }
+                MouseArea { id: closeFxM; anchors.fill: parent
+                    hoverEnabled: true
+                    onClicked: showFx = false }
+            }
+        }
     }
 
     // Pad keyboard input: an always-on key handler at root level.
@@ -966,9 +1368,19 @@ ApplicationWindow {
                         anchors.top: parent.top; anchors.right: parent.right
                         anchors.margins: 3
                         width: mT.width + 8; height: 13; radius: 6
-                        color: model.mode === "loop" ? cGreen : "#00000070"
+                        color: {
+                            if (model.mode === "loop") return cGreen
+                            if (model.mode === "hold") return cOrange
+                            if (model.mode === "gate") return cYellow
+                            return "#00000070"
+                        }
                         Text { id: mT; anchors.centerIn: parent
-                            text: model.mode === "one_shot" ? "OS" : "LOOP"
+                            text: {
+                                if (model.mode === "loop") return "LP"
+                                if (model.mode === "hold") return "HD"
+                                if (model.mode === "gate") return "GT"
+                                return "OS"
+                            }
                             color: "white"; font.pixelSize: 7; font.bold: true }
                         MouseArea { anchors.fill: parent
                             onPressed: function(m) {
@@ -1163,6 +1575,155 @@ ApplicationWindow {
                 width: parent.width
                 spacing: 10
 
+                // Pad behavior — mode, choke group, single voice
+                Rectangle {
+                    width: paramsCol.width
+                    height: padBehaviorCol.height + 16
+                    radius: 6
+                    color: cCard
+                    border.color: cBorder
+
+                    Column {
+                        id: padBehaviorCol
+                        x: 8; y: 8
+                        width: parent.width - 16
+                        spacing: 8
+
+                        Text { text: "Pad behavior"; color: cText
+                            font.pixelSize: 12; font.bold: true }
+
+                        Row {
+                            spacing: 6
+                            Repeater {
+                                model: [
+                                    { v: "one_shot", lbl: "One-Shot" },
+                                    { v: "loop",     lbl: "Loop" },
+                                    { v: "hold",     lbl: "Hold" },
+                                    { v: "gate",     lbl: "Gate" }
+                                ]
+                                delegate: Rectangle {
+                                    width: 84; height: 26; radius: 4
+                                    color: controller.currentPadMode === modelData.v
+                                           ? cAccent : cCard
+                                    border.color: cBorder
+                                    Text {
+                                        anchors.centerIn: parent
+                                        text: modelData.lbl
+                                        color: cText; font.pixelSize: 10
+                                        font.bold: controller.currentPadMode === modelData.v
+                                    }
+                                    MouseArea { anchors.fill: parent
+                                        onClicked: controller.setCurrentPadMode(modelData.v) }
+                                }
+                            }
+                        }
+
+                        Row {
+                            spacing: 6
+                            Text {
+                                text: "Choke group:"; color: cMuted
+                                font.pixelSize: 11
+                                anchors.verticalCenter: parent.verticalCenter
+                            }
+                            Repeater {
+                                model: [0, 1, 2, 3, 4]
+                                delegate: Rectangle {
+                                    width: 32; height: 24; radius: 4
+                                    color: controller.currentPadGroup === modelData
+                                           ? cAccent : cCard
+                                    border.color: cBorder
+                                    Text {
+                                        anchors.centerIn: parent
+                                        text: modelData === 0 ? "—" : String(modelData)
+                                        color: cText; font.pixelSize: 11
+                                        font.bold: controller.currentPadGroup === modelData
+                                    }
+                                    MouseArea { anchors.fill: parent
+                                        onClicked: controller.setCurrentPadGroup(modelData) }
+                                }
+                            }
+                            Item { width: 12; height: 1 }
+                            Rectangle {
+                                width: 130; height: 24; radius: 4
+                                color: controller.currentPadChokeSelf ? cAccent : cCard
+                                border.color: cBorder
+                                Text {
+                                    anchors.centerIn: parent
+                                    text: controller.currentPadChokeSelf
+                                          ? "✓ single voice" : "Single voice"
+                                    color: cText; font.pixelSize: 10
+                                    font.bold: controller.currentPadChokeSelf
+                                }
+                                MouseArea { anchors.fill: parent
+                                    onClicked: controller.setCurrentPadChokeSelf(
+                                        !controller.currentPadChokeSelf) }
+                            }
+                        }
+                    }
+                }
+
+                // Loop sync to BPM grid
+                Rectangle {
+                    width: paramsCol.width
+                    height: loopSyncCol.height + 16
+                    radius: 6
+                    color: cCard
+                    border.color: cBorder
+
+                    Column {
+                        id: loopSyncCol
+                        x: 8; y: 8
+                        width: parent.width - 16
+                        spacing: 8
+
+                        Text { text: "Loop sync to beat grid"; color: cText
+                            font.pixelSize: 12; font.bold: true }
+
+                        Row {
+                            spacing: 6
+                            Repeater {
+                                model: [0, 1, 2, 4, 8, 16, 32]
+                                delegate: Rectangle {
+                                    width: 44; height: 26; radius: 4
+                                    color: controller.currentSampleLoopBeats === modelData
+                                           ? cAccent : cCard
+                                    border.color: cBorder
+                                    Text {
+                                        anchors.centerIn: parent
+                                        text: modelData === 0 ? "OFF" : modelData + "b"
+                                        color: cText; font.pixelSize: 10
+                                        font.bold: controller.currentSampleLoopBeats === modelData
+                                    }
+                                    MouseArea { anchors.fill: parent
+                                        onClicked: controller.setCurrentSampleLoopBeats(modelData) }
+                                }
+                            }
+                            Item { width: 8; height: 1 }
+                            Rectangle {
+                                width: 60; height: 26; radius: 4
+                                color: autoLoopM.containsMouse ? cAccent : cCard
+                                border.color: cBorder
+                                Text {
+                                    anchors.centerIn: parent
+                                    text: "Auto"
+                                    color: cText; font.pixelSize: 10; font.bold: true
+                                }
+                                MouseArea { id: autoLoopM; anchors.fill: parent
+                                    hoverEnabled: true
+                                    onClicked: controller.autoDetectLoopBeats() }
+                            }
+                        }
+
+                        Text {
+                            text: "Stretches the sample so its length equals " +
+                                  "N beats at the project BPM — loops stay on the grid."
+                            color: cMuted; font.pixelSize: 10
+                            wrapMode: Text.Wrap
+                            width: parent.width
+                        }
+                    }
+                }
+
                 GridLayout {
                     width: parent.width
                     columns: 2
@@ -1285,6 +1846,56 @@ ApplicationWindow {
                                 var log20000 = Math.log(20000)
                                 var hz = Math.exp(log20 + (value / 100) * (log20000 - log20))
                                 controller.setCurrentSampleCutoff(hz)
+                            }
+                        }
+                    }
+                    // Highpass — logarithmic mapping (rumble / mud removal)
+                    Column {
+                        Layout.fillWidth: true; spacing: 4
+                        Item {
+                            width: parent.width; height: 18
+                            Text { text: "Highpass"; color: cText
+                                font.pixelSize: 12; font.bold: true
+                                anchors.left: parent.left
+                                anchors.verticalCenter: parent.verticalCenter }
+                            MiniBtn {
+                                id: hpResetBtn
+                                anchors.right: parent.right
+                                anchors.verticalCenter: parent.verticalCenter
+                                label: "↺"
+                                selColor: cOrange
+                                onClicked: controller.setCurrentSampleHighpass(20)
+                            }
+                            Text {
+                                anchors.right: hpResetBtn.left
+                                anchors.rightMargin: 6
+                                anchors.verticalCenter: parent.verticalCenter
+                                text: controller.currentSampleHighpassHz <= 21
+                                    ? "OFF"
+                                    : controller.currentSampleHighpassHz < 1000
+                                        ? controller.currentSampleHighpassHz.toFixed(0) + " Hz"
+                                        : (controller.currentSampleHighpassHz / 1000).toFixed(1) + " kHz"
+                                color: controller.currentSampleHighpassHz <= 21
+                                    ? cMuted : cAccent
+                                font.pixelSize: 11
+                                font.bold: controller.currentSampleHighpassHz > 21
+                            }
+                        }
+                        Slider {
+                            width: parent.width
+                            from: 0; to: 100; stepSize: 0.5
+                            value: {
+                                var hz = controller.currentSampleHighpassHz
+                                var log20 = Math.log(20)
+                                var log20000 = Math.log(20000)
+                                return ((Math.log(Math.max(20, hz)) - log20)
+                                    / (log20000 - log20)) * 100
+                            }
+                            onMoved: {
+                                var log20 = Math.log(20)
+                                var log20000 = Math.log(20000)
+                                var hz = Math.exp(log20 + (value / 100) * (log20000 - log20))
+                                controller.setCurrentSampleHighpass(hz)
                             }
                         }
                     }
@@ -1846,7 +2457,7 @@ ApplicationWindow {
             height: 28; spacing: 4
 
             Repeater {
-                model: ["Slicing", "Pad Layout", "Playback", "MIDI/AI", "Info"]
+                model: ["Slicing", "Pad Layout", "Playback", "MIDI/AI", "Info", "Device"]
                 delegate: Rectangle {
                     width: 95; height: 28; radius: 6
                     color: settingsTab === index ? cAccent : cCard
@@ -2811,6 +3422,202 @@ ApplicationWindow {
                     Text {
                         text: "Sampler v5 — settings persist to data/settings.json"
                         color: cBorder; font.pixelSize: 9
+                    }
+                }
+
+                // ──── TAB 5: DEVICE ────
+                Column {
+                    visible: settingsTab === 5
+                    width: parent.width; spacing: 12
+
+                    // Connection status
+                    Row {
+                        width: parent.width; spacing: 10
+                        Rectangle {
+                            width: 12; height: 12; radius: 6
+                            color: controller.deviceConnected ? cGreen : cRed
+                            anchors.verticalCenter: parent.verticalCenter
+                        }
+                        Text {
+                            text: controller.deviceConnected
+                                  ? "Connected to virtual device"
+                                  : "Disconnected"
+                            color: cText; font.pixelSize: 13; font.bold: true
+                            anchors.verticalCenter: parent.verticalCenter
+                        }
+                        Item { width: 16; height: 1 }
+                        MiniBtn {
+                            label: controller.deviceConnected ? "Disconnect" : "Connect"
+                            onClicked: controller.deviceConnected
+                                       ? controller.disconnectDevice()
+                                       : controller.connectDevice()
+                        }
+                        MiniBtn { label: "Refresh"
+                            onClicked: controller.refreshDevice() }
+                    }
+
+                    // SD card path + open in file manager
+                    Row {
+                        width: parent.width; spacing: 8
+                        Text { text: "SD card:"; color: cMuted; font.pixelSize: 11
+                            anchors.verticalCenter: parent.verticalCenter }
+                        Text {
+                            text: controller.deviceSdPath || "—"
+                            color: cText; font.pixelSize: 11
+                            elide: Text.ElideMiddle
+                            width: 420
+                            anchors.verticalCenter: parent.verticalCenter
+                        }
+                        MiniBtn { label: "Open"
+                            onClicked: controller.openDeviceSd() }
+                    }
+
+                    // Storage bar
+                    Column { width: parent.width; spacing: 4
+                        Row { spacing: 8
+                            Text { text: "Storage:"; color: cText
+                                font.pixelSize: 11; font.bold: true
+                                anchors.verticalCenter: parent.verticalCenter }
+                            Text { text: controller.deviceStorageText
+                                color: cMuted; font.pixelSize: 11
+                                anchors.verticalCenter: parent.verticalCenter }
+                        }
+                        Rectangle {
+                            width: parent.width; height: 8; radius: 4
+                            color: cCard; border.color: cBorder
+                            Rectangle {
+                                x: 1; y: 1
+                                width: (parent.width - 2)
+                                       * controller.deviceStorageFraction
+                                height: parent.height - 2; radius: 3
+                                color: cAccent
+                            }
+                        }
+                    }
+
+                    Rectangle { width: parent.width; height: 1; color: cBorder }
+
+                    // Push current project as a kit
+                    Column { width: parent.width; spacing: 6
+                        Text { text: "Push current project"
+                            color: cText; font.pixelSize: 12; font.bold: true }
+                        Row { spacing: 8; width: parent.width
+                            TextField {
+                                id: kitNameField
+                                placeholderText: "kit name"
+                                width: 240
+                                color: cText
+                            }
+                            MiniBtn {
+                                label: "Push to device"
+                                onClicked: {
+                                    controller.pushCurrentProjectToDevice(
+                                        kitNameField.text)
+                                    kitNameField.text = ""
+                                }
+                            }
+                        }
+                    }
+
+                    Rectangle { width: parent.width; height: 1; color: cBorder }
+
+                    // Kits on device
+                    Column { width: parent.width; spacing: 6
+                        Text {
+                            text: "Kits on device (" + controller.deviceKits.length + ")"
+                            color: cText; font.pixelSize: 12; font.bold: true
+                        }
+                        Repeater {
+                            model: controller.deviceKits
+                            delegate: Row {
+                                spacing: 8
+                                Text {
+                                    text: modelData; color: cText
+                                    font.pixelSize: 11; width: 300
+                                    elide: Text.ElideRight
+                                    anchors.verticalCenter: parent.verticalCenter
+                                }
+                                MiniBtn { label: "Load"
+                                    onClicked: controller.loadKitFromDevice(modelData) }
+                                MiniBtn { label: "Delete"
+                                    selected: true; selColor: cRed
+                                    onClicked: controller.deleteKitFromDevice(modelData) }
+                            }
+                        }
+                        Text {
+                            visible: controller.deviceKits.length === 0
+                            text: "No kits yet — push a project to put one here."
+                            color: cMuted; font.pixelSize: 10
+                        }
+                    }
+
+                    Rectangle { width: parent.width; height: 1; color: cBorder }
+
+                    // Pad presets
+                    Column { width: parent.width; spacing: 6
+                        Text {
+                            text: "Pad presets (" + controller.devicePresets.length + ")"
+                            color: cText; font.pixelSize: 12; font.bold: true
+                        }
+                        Row { spacing: 8; width: parent.width
+                            TextField {
+                                id: presetNameField
+                                placeholderText: "preset name"
+                                width: 240
+                                color: cText
+                            }
+                            MiniBtn {
+                                label: "Save current pads"
+                                onClicked: {
+                                    controller.savePresetToDevice(
+                                        presetNameField.text)
+                                    presetNameField.text = ""
+                                }
+                            }
+                        }
+                        Repeater {
+                            model: controller.devicePresets
+                            delegate: Row {
+                                spacing: 8
+                                Text {
+                                    text: modelData; color: cText
+                                    font.pixelSize: 11; width: 300
+                                    elide: Text.ElideRight
+                                    anchors.verticalCenter: parent.verticalCenter
+                                }
+                                MiniBtn { label: "Apply"
+                                    onClicked: controller.loadPresetFromDevice(modelData) }
+                            }
+                        }
+                    }
+
+                    Rectangle { width: parent.width; height: 1; color: cBorder }
+
+                    // Recent events
+                    Column { width: parent.width; spacing: 4
+                        Text { text: "Recent events"
+                            color: cText; font.pixelSize: 12; font.bold: true }
+                        Repeater {
+                            model: controller.deviceLog
+                            delegate: Text {
+                                text: "· " + modelData
+                                color: cMuted; font.pixelSize: 10
+                                wrapMode: Text.Wrap
+                                width: parent.width
+                            }
+                        }
+                        Text {
+                            visible: controller.deviceLog.length === 0
+                            text: "(no events yet)"
+                            color: cBorder; font.pixelSize: 10
+                        }
+                    }
+
+                    Text {
+                        text: "Tip: run python -m app.hardware.virtual_device in a terminal first."
+                        color: cBorder; font.pixelSize: 9
+                        wrapMode: Text.Wrap
+                        width: parent.width
                     }
                 }
             }
