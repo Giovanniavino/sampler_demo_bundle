@@ -20,7 +20,6 @@ from typing import Optional
 import numpy as np
 
 from app.audio.dsp.effects import EffectsChain
-from app.audio.looper import Looper
 from app.core.models import Pad, PadMode, Sample, Stem, StemType
 
 log = logging.getLogger(__name__)
@@ -65,6 +64,7 @@ class _Voice:
     pad_index: int = -1
     group: int = 0
     active: bool = True
+    loop_seamless: bool = False    # buffer pre-baked: skip callback crossfade
 
 
 @dataclass
@@ -118,20 +118,6 @@ class SounddevicePlaybackEngine(PlaybackEngine):
         # until the process runs out of memory.
         self._capture_max_blocks = int(
             600.0 * sample_rate / max(1, block_size)) + 8
-
-        # NEW: bar-locked looper — captures the post-effects master output
-        # for N bars and plays it back forever in sync with the project tempo.
-        self._looper = Looper(sample_rate)
-
-        # Rolling history of the post-master-chain master (100 ms), used by
-        # the looper as PRE-ROLL: when start_record fires, the engine has
-        # already missed 30-50 ms of the actual downbeat to UI latency. We
-        # splice in that recent history so the loop's sample 0 lines up
-        # with the real musical beat, not the trigger sample.
-        self._history_length = int(0.1 * sample_rate)
-        self._history = np.zeros((self._history_length, 2), dtype=np.float32)
-        self._history_pos = 0
-        self._loop_preroll_ms = 40.0
 
     def set_project_bpm(self, bpm: float) -> None:
         """Set the project BPM, used for loop-to-grid quantization
@@ -374,90 +360,6 @@ class SounddevicePlaybackEngine(PlaybackEngine):
         """Rendered (baked-DSP) audio buffer for each registered sample."""
         return self._sample_buffers
 
-    # ---- Looper --------------------------------------------------------
-
-    def looper_configure(self, bars: int, bpm: float,
-                         beats_per_bar: int = 4) -> None:
-        self._enqueue(_Command("looper_configure", {
-            "bars": bars, "bpm": bpm, "beats_per_bar": beats_per_bar,
-        }))
-
-    def looper_arm_record(self, track: int) -> None:
-        self._enqueue(_Command("looper_arm_record", {"track": track}))
-
-    def looper_arm_overdub(self, track: int) -> None:
-        self._enqueue(_Command("looper_arm_overdub", {"track": track}))
-
-    def looper_start_record(self, track: int) -> None:
-        self._enqueue(_Command("looper_start_record", {"track": track}))
-
-    def looper_start_overdub(self, track: int) -> None:
-        self._enqueue(_Command("looper_start_overdub", {"track": track}))
-
-    def looper_stop_overdub(self, track: int) -> None:
-        self._enqueue(_Command("looper_stop_overdub", {"track": track}))
-
-    def looper_cancel(self, track: int) -> None:
-        self._enqueue(_Command("looper_cancel", {"track": track}))
-
-    def looper_clear(self, track: int) -> None:
-        self._enqueue(_Command("looper_clear", {"track": track}))
-
-    def looper_undo(self, track: int) -> None:
-        self._enqueue(_Command("looper_undo", {"track": track}))
-
-    def looper_track_state(self, track: int) -> str:
-        t = self._looper.track(track)
-        return t.state if t is not None else "idle"
-
-    def looper_track_position(self, track: int) -> float:
-        t = self._looper.track(track)
-        return t.position_frac if t is not None else 0.0
-
-    def looper_track_has_undo(self, track: int) -> bool:
-        t = self._looper.track(track)
-        return t.has_undo if t is not None else False
-
-    def set_loop_preroll_ms(self, ms: float) -> None:
-        """Set how many ms of pre-roll history to splice in when loop
-        recording starts (0-100). Compensates for UI/queue latency."""
-        self._enqueue(_Command("loop_preroll", {"ms": float(ms)}))
-
-    @property
-    def loop_preroll_ms(self) -> float:
-        return self._loop_preroll_ms
-
-    # ---- Rolling master history (for looper pre-roll) ------------------
-
-    def _write_history(self, master: np.ndarray) -> None:
-        frames = len(master)
-        if frames <= 0 or self._history_length <= 0:
-            return
-        pos = self._history_pos
-        end = pos + frames
-        if end <= self._history_length:
-            self._history[pos:end] = master
-        else:
-            first = self._history_length - pos
-            self._history[pos:self._history_length] = master[:first]
-            self._history[:frames - first] = master[first:]
-        self._history_pos = (pos + frames) % self._history_length
-
-    def _read_history(self, samples_back: int) -> np.ndarray:
-        """Return the last ``samples_back`` master samples, chronologically."""
-        if samples_back <= 0 or self._history_length <= 0:
-            return np.zeros((0, 2), dtype=np.float32)
-        samples_back = min(samples_back, self._history_length)
-        out = np.empty((samples_back, 2), dtype=np.float32)
-        start = (self._history_pos - samples_back) % self._history_length
-        if start + samples_back <= self._history_length:
-            out[:] = self._history[start:start + samples_back]
-        else:
-            first = self._history_length - start
-            out[:first] = self._history[start:self._history_length]
-            out[first:] = self._history[:samples_back - first]
-        return out
-
     def start(self) -> None:
         import sounddevice as sd
 
@@ -550,9 +452,7 @@ class SounddevicePlaybackEngine(PlaybackEngine):
         # Idle fast path: with nothing playing, no effect tail ringing,
         # and no loop being recorded or played back, the output is silence
         # — skip all per-pad mixing entirely.
-        looper_busy = self._looper.any_active()
-        if (not self._voices and not self._any_chain_ringing()
-                and not looper_busy):
+        if not self._voices and not self._any_chain_ringing():
             if self._capture_blocks is not None:
                 self._append_capture(np.zeros((frames, 2), dtype=np.float32))
             return
@@ -587,24 +487,29 @@ class SounddevicePlaybackEngine(PlaybackEngine):
                 if tail > 0:
                     target[:tail] += buf[v.position:]
                 if v.loop and buf_len > 0:
-                    # ~5 ms crossfade — long enough to bridge the 2 ms
-                    # anti-click ramps at both ends of a loop-ready buffer
-                    # so the seam stays at full level.
-                    xfade = min(int(0.005 * self.sample_rate),
-                                buf_len // 4, tail)
                     leftover = frames - tail
                     if leftover <= 0:
                         v.position = 0
                         remaining.append(v)
                         continue
 
-                    if xfade > 0 and tail >= xfade:
-                        ramp_in = np.linspace(0.0, 1.0, xfade,
-                                              dtype=np.float32)[:, None]
-                        ramp_out = 1.0 - ramp_in
-                        target[tail - xfade:tail] *= ramp_out
-                        head = buf[:xfade] * ramp_in
-                        target[tail - xfade:tail] += head
+                    # Seamless voices have the wrap baked into the buffer
+                    # (see _render_sample): sample 0 IS the natural
+                    # continuation of sample length-1 in the underlying
+                    # stem, so we can wrap with a hard cut — no crossfade
+                    # needed, and no double-play of the first samples.
+                    if not v.loop_seamless:
+                        # Legacy fallback for buffers without pre-baked
+                        # loop closure (e.g. path-based samples).
+                        xfade = min(int(0.005 * self.sample_rate),
+                                    buf_len // 4, tail)
+                        if xfade > 0 and tail >= xfade:
+                            ramp_in = np.linspace(0.0, 1.0, xfade,
+                                                  dtype=np.float32)[:, None]
+                            ramp_out = 1.0 - ramp_in
+                            target[tail - xfade:tail] *= ramp_out
+                            head = buf[:xfade] * ramp_in
+                            target[tail - xfade:tail] += head
 
                     if leftover < buf_len:
                         target[tail:tail + leftover] += buf[:leftover]
@@ -634,16 +539,6 @@ class SounddevicePlaybackEngine(PlaybackEngine):
         # Master insert chain (applied to the summed mix).
         if self._master_chain.any_enabled:
             master = self._master_chain.process(master)
-
-        # Write to rolling history BEFORE looper.process: history must
-        # contain the dry pre-loop master so PRE-ROLL matches what the
-        # looper would capture if it started slightly earlier.
-        self._write_history(master)
-
-        # Bar-locked looper: records master in / plays the loop buffer back
-        # into master. Sits after the master chain so the loop captures
-        # the final processed mix, not the raw voices.
-        self._looper.process(master)
 
         np.clip(master, -1.0, 1.0, out=master)
 
@@ -704,6 +599,11 @@ class SounddevicePlaybackEngine(PlaybackEngine):
             if len(self._voices) >= self.MAX_VOICES:
                 self._voices.pop(0)
 
+            sample_obj = self._samples.get(sid)
+            seamless = bool(
+                sample_obj is not None
+                and getattr(sample_obj, "loop_ready", False)
+            )
             self._voices.append(_Voice(
                 sample_id=sid,
                 audio=buf,
@@ -712,6 +612,7 @@ class SounddevicePlaybackEngine(PlaybackEngine):
                 hold=(mode == PadMode.HOLD),
                 pad_index=pad_index,
                 group=group,
+                loop_seamless=seamless,
             ))
 
         elif cmd.kind == "release":
@@ -758,61 +659,6 @@ class SounddevicePlaybackEngine(PlaybackEngine):
                                 cmd.payload["param"],
                                 cmd.payload["value"])
 
-        elif cmd.kind == "looper_configure":
-            self._looper.configure(
-                cmd.payload.get("bars", 4),
-                cmd.payload.get("bpm", 120.0),
-                cmd.payload.get("beats_per_bar", 4),
-            )
-
-        elif cmd.kind == "looper_arm_record":
-            t = self._looper.track(cmd.payload.get("track", 0))
-            if t is not None:
-                t.arm_record()
-
-        elif cmd.kind == "looper_arm_overdub":
-            t = self._looper.track(cmd.payload.get("track", 0))
-            if t is not None:
-                t.arm_overdub()
-
-        elif cmd.kind == "looper_start_record":
-            t = self._looper.track(cmd.payload.get("track", 0))
-            if t is not None:
-                preroll_samples = int(
-                    self._loop_preroll_ms * 0.001 * self.sample_rate)
-                preroll = (self._read_history(preroll_samples)
-                           if preroll_samples > 0 else None)
-                t.start_record_now(preroll)
-
-        elif cmd.kind == "loop_preroll":
-            self._loop_preroll_ms = max(
-                0.0, min(100.0, float(cmd.payload.get("ms", 40.0))))
-
-        elif cmd.kind == "looper_start_overdub":
-            t = self._looper.track(cmd.payload.get("track", 0))
-            if t is not None:
-                t.start_overdub_now()
-
-        elif cmd.kind == "looper_stop_overdub":
-            t = self._looper.track(cmd.payload.get("track", 0))
-            if t is not None:
-                t.stop_overdub()
-
-        elif cmd.kind == "looper_cancel":
-            t = self._looper.track(cmd.payload.get("track", 0))
-            if t is not None:
-                t.cancel()
-
-        elif cmd.kind == "looper_clear":
-            t = self._looper.track(cmd.payload.get("track", 0))
-            if t is not None:
-                t.clear()
-
-        elif cmd.kind == "looper_undo":
-            t = self._looper.track(cmd.payload.get("track", 0))
-            if t is not None:
-                t.undo()
-
     def _fx_chain(self, payload: dict) -> Optional[EffectsChain]:
         """Resolve an fx command payload to its target EffectsChain."""
         if payload.get("target") == "master":
@@ -823,7 +669,28 @@ class SounddevicePlaybackEngine(PlaybackEngine):
 
     def _render_sample(self, sample: Sample) -> Optional[np.ndarray]:
         """Render a sample with all effects baked in: pitch, time-stretch,
-        cutoff, pan, fades, gain, reverse."""
+        cutoff, pan, fades, gain, reverse.
+
+        Loop-ready samples (``sample.loop_ready=True``) that come from a stem
+        get the "extra tail" trick: we load a short slice past ``end_sample``
+        from the stem, process it through the same DSP, and at the end blend
+        it into the first samples of the buffer. The buffer's sample 0 is
+        then the natural continuation of sample length-1 — wrap is perfectly
+        seamless, no crossfade needed at playback.
+        """
+        loop_ready = getattr(sample, "loop_ready", False)
+        loop_beats = int(getattr(sample, "loop_beats", 0) or 0)
+        # The "extras" bake works cleanly only when:
+        #   - source is a stem (we can read audio past end_sample),
+        #   - loop_beats == 0 (otherwise quantize-to-beats would warp the
+        #     extras along with the loop and the bake math falls apart).
+        can_bake = (
+            loop_ready and loop_beats == 0
+            and sample.source_stem_id
+            and sample.source_stem_id in self._stem_audio
+        )
+        extra_raw = 0
+
         # 1) Load raw audio
         if sample.path and sample.path.exists():
             import soundfile as sf
@@ -845,7 +712,11 @@ class SounddevicePlaybackEngine(PlaybackEngine):
             start, end = self._snap_zero_crossings(
                 src, sample.start_sample, sample.end_sample
             )
-            buf = src[start:end].copy()
+            if can_bake:
+                # Pull up to 20 ms of audio past the loop end for the bake.
+                target_extra = int(0.020 * self.sample_rate)
+                extra_raw = min(target_extra, max(0, len(src) - end))
+            buf = src[start:end + extra_raw].copy()
         else:
             log.warning("Sample %s has no playable source", sample.name)
             return None
@@ -894,24 +765,54 @@ class SounddevicePlaybackEngine(PlaybackEngine):
         if sample.gain_db != 0.0:
             buf *= 10 ** (sample.gain_db / 20.0)
 
-        # 7) Anti-click ramps + user fades.
-        # For loop-ready samples we skip the longer user fades: a ~6 ms
-        # fade-out at the end would leave the loop seam in near-silence
-        # and the bass loop would breathe at every wrap.
+        # 7) Boundary handling — three paths.
         n = len(buf)
         anti_click = min(int(0.002 * self.sample_rate), n // 4)
-        if getattr(sample, "loop_ready", False):
+
+        if can_bake and extra_raw > 0:
+            # Bake the extras into the start of the buffer so the wrap is
+            # the natural continuation of the loop end.
+            stretch = max(0.01, float(sample.time_stretch))
+            extra_post = int(round(extra_raw * stretch))
+            extra_post = min(extra_post, max(0, n - 64))
+            if extra_post > 0:
+                playable_len = n - extra_post
+                xfade = min(extra_post, playable_len // 4)
+                if xfade > 0:
+                    ramp_in = np.linspace(
+                        0.0, 1.0, xfade, dtype=np.float32)[:, None]
+                    ramp_out = 1.0 - ramp_in
+                    extras = buf[playable_len:playable_len + xfade].copy()
+                    orig_start = buf[:xfade].copy()
+                    buf[:xfade] = extras * ramp_out + orig_start * ramp_in
+                buf = buf[:playable_len].copy()
+            # No fades applied: zero-crossing snap on start/end keeps both
+            # ends near zero, the bake makes the wrap continuous in waveform.
+        elif loop_ready:
+            # Stem-less or beat-locked loop: skip user fades, keep only the
+            # tiny anti-click so wrap doesn't dip too much.
             fin = anti_click
             fout = anti_click
+            if fin > 0:
+                ramp = np.linspace(
+                    0.0, 1.0, fin, dtype=np.float32)[:, None]
+                buf[:fin] *= ramp
+            if fout > 0:
+                ramp = np.linspace(
+                    1.0, 0.0, fout, dtype=np.float32)[:, None]
+                buf[-fout:] *= ramp
         else:
+            # Regular sample (one-shot, gate, hold): full user-controlled fades.
             fin = max(min(sample.fade_in_samples, n // 2), anti_click)
             fout = max(min(sample.fade_out_samples, n // 2), anti_click)
-        if fin > 0:
-            ramp = np.linspace(0.0, 1.0, fin, dtype=np.float32)[:, None]
-            buf[:fin] *= ramp
-        if fout > 0:
-            ramp = np.linspace(1.0, 0.0, fout, dtype=np.float32)[:, None]
-            buf[-fout:] *= ramp
+            if fin > 0:
+                ramp = np.linspace(
+                    0.0, 1.0, fin, dtype=np.float32)[:, None]
+                buf[:fin] *= ramp
+            if fout > 0:
+                ramp = np.linspace(
+                    1.0, 0.0, fout, dtype=np.float32)[:, None]
+                buf[-fout:] *= ramp
 
         if sample.normalized:
             peak = float(np.max(np.abs(buf))) or 1.0

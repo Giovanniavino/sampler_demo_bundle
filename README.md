@@ -1,334 +1,195 @@
-# Sampler
+# TPmix Sampler — Prototipo Software
 
-A professional audio sampling and slicing workstation with real-time pad control, AI-powered source separation, and modular hardware support.
+> *Importi una canzone → l'AI la separa in stem → suoni sui pad → salvi il kit sul device.*
 
-**Status:** v4 (stable) | **License:** MIT | **Python:** 3.10+
+Un sampler/drumpad con separazione AI integrata, scritto in Python come **prototipo software** del futuro hardware **TPmix MK1**.
 
----
+![Hardware TPmix MK1 — top view](docs/images/hardware-mockup.png)
 
-## Features
-
-### 🎛️ Core Sampler
-- **16–36 dynamic pads** with one-shot and loop modes
-- **Live waveform editor** — drag markers, zoom (pinch/scroll), snap-to-beat
-- **Sample parameters** — gain, pitch, time stretch, reverse, fade in/out, with instant reset
-- **4 drum stems** — drums, vocals, bass, melody (via AI separation)
-
-### 🎯 Intelligent Slicing
-- **AI-powered separation** — Demucs (fast/quality mode, user-selectable)
-- **Preset-based slicing** — vocal phrases, drum hits, melodic loops, basslines
-- **Custom parameters** — adjust min/max lengths, gaps, max count per category
-- **Auto-assignment** — pad layout configurable (4–6 columns, scrollable grid)
-
-### 🎚️ Playback & Effects
-- **Multi-bank switching** — Bank A/B/C, each with 16–36 pads
-- **Press-hold loop** — retrigger sample when held after playback ends
-- **Auto-choke drums** — new hit cuts the previous one
-- **Noise reduction** — light/strong pre and post-separation
-- **Sample rate** — 22 kHz to 96 kHz; block size configurable
-
-### ⚙️ Settings Panel
-- **4 organized tabs** — Slicing / Pad Layout / Playback / Info
-- **JSON persistence** — all settings saved and restored
-- **Quality mode reset** — switch between fast (htdemucs) and quality (htdemucs_ft) modes
-
-### 🎚️ Hardware Ready
-- **MIDI support** — pad learn, CC control (in `app/hardware/midi/`)
-- **Modular I/O** — OSC protocol prepared (`app/hardware/osc/`)
-- **Network API** — REST + WebSocket endpoints for remote control (see [ARCHITECTURE_ASSESSMENT.md](ARCHITECTURE_ASSESSMENT.md))
-- **ESP32 compatible** — firmware for custom hardware controllers
+> **TPmix MK1** — 340 × 196 × 38 mm · case in alluminio cream · 5" LCD 800×480 · 4×4 pad RGB in silicone · fader 60 mm con VU 8-LED · 4 encoder endless push · ribbon 16-LED · USB-C + MIDI + slot SD · monitor speaker integrato.
 
 ---
 
-## Quick Start
+## ⏸️ Stato: in pausa volontaria
 
-### Prerequisites
-- **Python 3.10+**
-- **PyQt6** (desktop UI)
-- **FFmpeg** (audio codec support)
+Il prototipo Python che vedi qui è **funzionante** e copre la storia completa: importi un brano → Demucs separa → l'auto-slicer crea i sample → li suoni sui pad → salvi tutto come kit portabile su un device virtuale.
 
-### Installation
+Ma questo è solo un proof-of-concept.
+
+**Il progetto entra in pausa per qualche mese** perché il prossimo passo non è "aggiungere features in Python" — è ripartire seri:
+
+- 🔧 **Motore audio riscritto in C** — lock-free ring buffer, allocazione zero nel callback, latenza target < 5 ms, portabile su Raspberry Pi e su micro DSP embedded.
+- 🖥️ **Hardware MK1 fisico** — PCB custom, case in alluminio fresato, encoder ottici, pad in silicone retro-illuminati con calibrazione velocity reale.
+- ⚙️ **Firmware embedded** — gestione I/O, pad, encoder, LED feedback senza passare dal sistema operativo.
+- 🧱 **Frontend desktop** — il Python QML attuale viene rimodellato come *editor* dei kit del device, non come strumento standalone.
+
+Quando torna, torna come **prodotto vero**. Non come un'altra app Python qualsiasi.
+
+---
+
+## Come dovrebbe sentirsi — UI target
+
+![UI mockups](docs/images/ui-mockups.png)
+
+Quattro schermate principali del software finale:
+
+| Vista | Cosa fa |
+|---|---|
+| **Pad Live** | Performance: 16 pad con waveform preview, 4 stem mixer (mute/solo/level), 4 encoder mappati a VOL · PITCH · FILT · SWING. |
+| **Stem Browser** | Esplori i chop di ogni stem, preview, snap zero-crossing, "ASSIGN → PAD" su un pad mirato. |
+| **Waveform Editor** | Editing sample-accurate: marker drag, snap zero-X + beat grid, tag (PHRASE/CORE/BREAK), pad mode (ONE/GATE/HOLD/LOOP), choke group, preset Vocal/Drum/Loop. |
+| **AI Separation** | Pipeline Demucs visualizzata: DECODE → NORMALIZE → SEPARATE → AUTO-SLICE → QUALITY → ASSIGN, con log live, ETA e cancel. |
+
+Aesthetic deciso: **cream / orange / navy**, mono tecnico, niente bordi gratuiti, ogni cosa leggibile da 50 cm su un 5".
+
+---
+
+## Cosa funziona oggi nel prototipo
+
+Tutto quello che vedi nei mockup ha già un'implementazione funzionante in Python, in forma grezza:
+
+**Audio**
+- Import (`mp3 / wav / flac / ogg / m4a`) + analisi (BPM frazionario, time signature, key bilingue EN/IT, section detector).
+- Separazione Demucs (`htdemucs` / `htdemucs_ft`) con fallback DSP-only se mancano i pesi.
+- Noise reduction pre/post separazione (light/strong).
+- Auto-slicing: phrase detection sui vocal, transient sui drum, loop con BPM sync.
+- Pad engine: `sounddevice` + `numpy`, mixing per-pad, choke group, modi ONE / GATE / HOLD / LOOP, retrigger pulito.
+- DSP sample-level: pitch + time stretch, reverse, highpass/lowpass, pan, gain, fade, loop seamless con extra-tail bake.
+- Catena effetti per-pad e master: EQ 3 bande RBJ, compressor envelope, reverb Freeverb, delay con feedback, chorus LFO.
+
+**Workflow**
+- Kit portabili (`kit.json` + audio in cartella relocabile, path relativi, validazione integrità).
+- Push su device virtuale via TCP localhost:5555 (length-prefixed JSON).
+- Recorder eventi pad + player con quantize (0–100% blend), count-in, metronomo con click sintetizzati.
+- Export sequenza offline → WAV; bounce live dell'uscita master con cap di sicurezza.
+
+**UI**
+- QML monolitica con waveform editor DAW-style (peaks decimati, view window, marker drag-preview/release-commit).
+- 5 pannelli: Pads, Editor, FX, Browser, Settings (5 tab).
+- Keyboard shortcuts QWERTY mappate sui pad + transport.
+
+**85 test verdi** (unit + integration), QML headless load OK.
+
+---
+
+## Quick start
 
 ```bash
-# Clone the repository
-git clone https://github.com/yourusername/sampler.git
-cd sampler
-
-# Create a virtual environment
+cd code
 python -m venv venv
-source venv/bin/activate  # or `venv\Scripts\activate` on Windows
 
-# Install dependencies
+# Windows
+venv\Scripts\activate
+
+# macOS / Linux
+source venv/bin/activate
+
 pip install -r requirements.txt
+pip install -r requirements-ai.txt    # opzionale: Demucs (~500 MB)
 
-# (Optional) For AI separation:
-pip install -r requirements-ai.txt
-```
-
-### First Run
-
-```bash
-# Desktop app
 python -m app.main
-
-# CLI demo (generate test track and auto-slice)
-python scripts/generate_demo_song.py
-python scripts/cli_run.py
-
-# Render audio (headless)
-python scripts/render_demo.py
 ```
 
-**UI Navigation:**
-- **Load** button → select an audio file (MP3, WAV, FLAC, OGG, M4A)
-- **Tap a pad** → edit its region in the waveform
-- **⚙️ Settings** → configure slicing, pad layout, playback, and quality mode
-- **Preview** button → trigger the current sample
-- **Reset** button → restore original parameters (region + edits)
+**Headless / CLI**
+```bash
+python -m scripts.cli_run path/to/song.mp3
+python -m scripts.render_demo
+```
+
+**Test**
+```bash
+pytest tests/ --basetemp=_tmptest
+```
+
+> Nota: `--basetemp=_tmptest` è un workaround per ambienti Windows dove `%TEMP%` ha permessi anomali.
 
 ---
 
-## Architecture
+## Architettura (snapshot del prototipo)
 
 ```
-sampler/
+code/
 ├── app/
-│   ├── core/               # Domain models (dataclasses, immutable)
-│   │   ├── models.py       # Sample, Pad, PadBank, Project, etc.
-│   │   ├── settings.py     # AppSettings, presets
-│   │   └── logging_setup.py
 │   ├── audio/
-│   │   ├── separation/     # Demucs, heuristic separators
-│   │   ├── slicing/        # Auto-slicer, pad assigner
-│   │   ├── analysis/       # BPM, key detection, vocal phrase finding
-│   │   ├── dsp/            # Waveform peaks, noise reduction
-│   │   └── playback/       # Sounddevice engine
-│   ├── services/
-│   │   └── pipeline.py     # High-level import → slicing → assignment
-│   ├── ui/
-│   │   ├── controllers/    # SamplerController (Qt signals/slots)
-│   │   └── qml/            # Main.qml (4-tab UI, waveform editor)
-│   ├── hardware/
-│   │   ├── midi/           # MIDI controller
-│   │   └── osc/            # OSC protocol
-│   ├── project/
-│   │   └── repository.py   # Save/load projects (JSON + stems)
-│   └── main.py             # Entry point
-├── scripts/
-│   ├── generate_demo_song.py
-│   ├── cli_run.py
-│   └── render_demo.py
-├── tests/
-│   ├── unit/               # Model, parser, waveform tests
-│   └── integration/        # Full pipeline tests
-├── data/
-│   ├── cache/              # Stem caches (auto-managed)
-│   ├── models/             # Demucs weights (downloaded on first use)
-│   ├── projects/           # User projects
-│   └── settings.json       # User settings
-├── requirements.txt        # Core runtime
-├── requirements-ai.txt     # Demucs + torch
-└── README.md               # This file
+│   │   ├── separation/   # Demucs + fallback euristico
+│   │   ├── slicing/      # auto-slicer, pad assigner
+│   │   ├── analysis/     # BPM, key, sections, vocal phrase, sample analyzer
+│   │   ├── dsp/          # effects, noise reduction, waveform peaks, zero-X
+│   │   ├── recording/    # recorder, player, sequence
+│   │   ├── metronome/
+│   │   ├── playback/     # sounddevice engine
+│   │   └── export/       # offline render + bounce
+│   ├── core/             # models, settings, logging
+│   ├── hardware/         # virtual device (TCP), wire protocol, MIDI detect
+│   ├── project/          # kit + preset persistence
+│   ├── services/         # pipeline facade
+│   └── ui/               # QML + Qt controller
+├── scripts/              # CLI + demo render
+└── tests/                # 85 test (unit + integration)
 ```
 
-### Design Principles
+### Principi tenuti fissi
 
-1. **Pure data models** — `core/models.py` has no I/O or audio logic; safe to serialize.
-2. **Modular pipeline** — separation → analysis → slicing → assignment → playback; each stage independent.
-3. **Qt layer is thin** — controller logic can be extracted for network APIs (see [ARCHITECTURE_ASSESSMENT.md](ARCHITECTURE_ASSESSMENT.md)).
-4. **Sample-accurate** — all audio offsets in SAMPLES (int), not seconds; stable across resampling.
-
----
-
-## Configuration
-
-### Slicing Presets
-
-**Vocal Phrases:**
-- `Short` — 800–5000 ms, 300 ms gap
-- `Medium` — 1500–10000 ms, 600 ms gap (default)
-- `Long` — 3000–15000 ms, 900 ms gap
-
-**Drum Hits:**
-- `Punchy` — 200 ms, ≤12 hits, 0.5 beat spacing
-- `Standard` — 400 ms, ≤16 hits, 1.0 beat spacing (default)
-- `Full` — 700 ms, ≤20 hits, 2.0 beat spacing
-
-**Loops:**
-- `Tight` — 3 loops/stem, 1–2 bar lengths
-- `Standard` — 4 loops/stem, 2–4 bar lengths (default)
-- `Spacious` — 4 loops/stem, 4–8 bar lengths
-
-All presets can be customized; switching to `Custom` saves manual values.
-
-### Noise Reduction
-
-- **Off** — no processing
-- **Light** — mild, preserves detail (default pre-separation)
-- **Strong** — aggressive, may darken tone (use post-separation with caution)
+1. **Modelli puri** — `core/models.py` non sa nulla di I/O o audio: serializzabile, testabile, immutabile dove ha senso.
+2. **Pipeline modulare** — separation → analysis → slicing → assignment → playback. Ogni stadio sostituibile.
+3. **Sample-accurate** — tutti gli offset audio in *sample interi*, mai in secondi (stabile su resample, sync, export).
+4. **Thread audio sacro** — il callback non alloca, non logga, non aspetta locks. Comandi UI → audio passano per una `queue.Queue` drenata a inizio callback.
 
 ---
 
-## Hardware Integration
+## Roadmap reale
 
-### MIDI Controller
-```python
-from app.hardware.midi.controller import MidiController
+| Fase | Cosa | Quando |
+|---|---|---|
+| **0** — Prototipo Python | ✅ Pipeline end-to-end funzionante, 85 test verdi | Fatto |
+| **Pausa** ⏸️ | Studio firmware, scelte componenti, design PCB, prototipi case | mesi |
+| **1** — Motore C portabile | Engine audio lock-free, < 5 ms RTL, build per Linux + RPi | TBD |
+| **2** — MK1 standalone | Hardware + firmware, kit caricati da SD | TBD |
+| **3** — MK1 PC-connected | Sync USB con frontend Python per import/editing | TBD |
+| **4** — Polish & beta | Calibrazione velocity reale, beta su utenti finali | TBD |
 
-midi = MidiController()
-# Pad 1-16 trigger via MIDI note 36-51
-# CC 7 → master volume, CC 74 → master filter
-```
-
-### Network API (Coming Soon)
-See [ARCHITECTURE_ASSESSMENT.md](ARCHITECTURE_ASSESSMENT.md) for details on REST/WebSocket API.
-
-### ESP32 Firmware
-Example controller for custom hardware:
-```
-esp32_controller/
-├── pad_matrix.py       # 16× touch pads
-├── encoders.py         # 2–4 rotary encoders
-├── websocket_client.py # → PC backend
-└── main.py
-```
+Niente date inventate. **Quando è pronto, è pronto.**
 
 ---
 
-## Performance
+## Stack tecnico
 
-| Task | Duration | Hardware |
-|------|----------|----------|
-| Demucs separation (3 min, fast mode) | ~30 sec | RTX 3060 (1.5 min on CPU) |
-| Auto-slicing (4 stems) | ~2 sec | CPU |
-| Waveform display (400 bins) | <1 ms | GPU (Canvas) |
-| Pad trigger → audio | <50 ms | RTX 3060 + RTX audio interface |
+**Oggi**
+`Python 3.10+` · `PyQt6 / QML` · `numpy` · `scipy` · `sounddevice` · `librosa` · `soundfile` · `pyrubberband` · `Demucs` (opzionale)
 
-**Settings recommended for 5" touchscreen (800×480):**
-- Grid size: 16–28 pads (4–6 columns)
-- Waveform scroll: enabled (pinch + wheel)
-- Quality mode: **Fast** (MOTO G Power, RPi 4) or **Quality** (desktop CPU)
+**Domani**
+`C` (motore) · `CMSIS-DSP` o equivalente ARM · `freertos` o bare-metal sul micro · `OpenGL ES` per il rendering UI sul 5" · Python solo come frontend desktop di companion.
 
 ---
 
-## Testing
+## Filosofia
 
-```bash
-# Unit tests (models, parsers, DSP)
-pytest tests/unit/
+Niente feature creep. Niente "aggiungo X perché è facile". Ogni pezzo nel firmware finale deve **suonare bene** prima ancora di esistere come codice. Se ho un dubbio sull'audio, non lo metto.
 
-# Integration tests (full pipeline)
-pytest tests/integration/
+> *"Make it work. Make it right. Make it fast."* — Kent Beck
 
-# Generate coverage report
-pytest --cov=app tests/
-```
+Il prototipo Python qui dentro è la fase "make it work". Il salto a C + hardware è la fase "make it right". Il polish finale del MK1 è "make it fast".
 
 ---
 
-## Development
+## Cosa NON c'è (e non ci sarà nel prototipo Python)
 
-### Adding a New Preset Type
-1. Define values in `app/core/settings.py` (e.g., `LOOP_PRESETS`)
-2. Add a QML slider and button in `Main.qml`
-3. Hook the button to `controller.applyLoopPreset(name)`
+Per scelta esplicita, queste cose sono **rinviate** all'hardware o cancellate del tutto:
 
-### Adding a Sample Parameter
-1. Add field to `Sample` dataclass in `app/core/models.py` (e.g., `reverb_wet: float = 0.0`)
-2. Add property to `SamplerController` in `app/ui/controllers/sampler_controller.py`
-3. Add slider to `Main.qml` (Sample Edit panel)
-4. Add playback logic to `SounddevicePlaybackEngine`
+- ❌ Looper performance multi-traccia (RC-505 style) — fuori scope, tagliato.
+- ❌ REST / WebSocket / API di rete — non serve a un sampler.
+- ❌ Plugin host VST3 — il MK1 ha effetti nativi, non plugin esterni.
+- ❌ App mobile companion — magari un giorno, non oggi.
+- ❌ Collaboration cloud — no.
 
-### Network API (Phase 2)
-See [ARCHITECTURE_ASSESSMENT.md](ARCHITECTURE_ASSESSMENT.md) for refactoring steps.
+Il prototipo Python serve a una cosa: **dimostrare la storia** (separa → suona → salva su device). Tutto il resto è rumore.
 
 ---
 
-## Known Limitations
+## Licenza
 
-- **Single project** — only one project open at a time (fix: add project switcher)
-- **No undo/redo** — edits are live; no command history yet
-- **No recording** — can't record live pad performances (pre-recorded samples only)
-- **Demucs models** — require ≥500 MB disk + optional GPU acceleration
-- **Touch responsiveness** — 5" screen may feel cramped for small pads (use 4-column layout)
+MIT.
 
 ---
 
-## Roadmap
-
-### v5 (Q2 2026)
-- [ ] Undo/redo stack
-- [ ] Project switcher + multi-project support
-- [ ] Recording engine
-- [ ] Quantizer (snap samples to beat grid)
-- [ ] Master EQ + compression
-
-### v6 (Q3 2026)
-- [ ] REST/WebSocket API (remote control)
-- [ ] ESP32 firmware + example controllers
-- [ ] Multi-bank LED feedback
-- [ ] Waveform tagging (cue points)
-
-### v7+
-- [ ] Custom effects (VST3 plugin host)
-- [ ] iOS/Android remote control app
-- [ ] Collaborative session recording
-
----
-
-## Troubleshooting
-
-### "Demucs model not found"
-```bash
-# Download models manually
-python -c "from demucs.pretrained import get_model; get_model('htdemucs')"
-```
-
-### Audio engine crashes on startup
-- Check `sounddevice` compatibility: `python -m sounddevice`
-- On macOS with M1: install `conda install pysoundfile`
-
-### Settings not saving
-- Ensure `data/settings.json` is writable
-- Check logs: `data/logs/sampler.log`
-
-### Waveform display is black
-- QML Canvas sometimes needs explicit paint triggers
-- Tap a different pad and return to refresh
-
----
-
-## License
-
-MIT — See [LICENSE](LICENSE) for details.
-
----
-
-## Contributing
-
-Pull requests welcome! Please:
-1. Ensure tests pass: `pytest`
-2. Follow PEP 8 style
-3. Update README if adding features
-4. Include a unit test for new logic
-
----
-
-## Credits
-
-- **Demucs** — Meta AI (music source separation)
-- **PyQt6** — Qt Company (cross-platform UI)
-- **sounddevice** — David Cortesi (audio I/O)
-- **librosa** — Brian McFee et al. (audio analysis)
-
----
-
-## Contact & Support
-
-- **Issues:** [GitHub Issues](https://github.com/yourusername/sampler/issues)
-- **Discussions:** [GitHub Discussions](https://github.com/yourusername/sampler/discussions)
-- **Email:** dev@example.com
-
----
-
-**Made with ❤️ for producers, DJs, and hardware hackers.**
+**Made by Giovanni Avino** · 🇮🇹 · 2026

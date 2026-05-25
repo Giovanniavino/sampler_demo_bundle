@@ -6,7 +6,8 @@
       "Bash(python -m pytest tests/ -q --ignore=tests/unit/test_qml_file_paths.py)",
       "Bash(python -m pytest tests/unit/test_marker_metronome_fixes.py::test_trim_preview_does_not_rerender_until_commit -q)",
       "Bash(python -m pytest \"tests/unit/test_v3_fixes.py::test_settings_save_load_roundtrip\" --basetemp=_basetemp -q)",
-      "Bash(python -m pytest tests/ --basetemp=_basetemp -q)"
+      "Bash(python -m pytest tests/ --basetemp=_basetemp -q)",
+      "Bash(ls \"C:\\\\progettu drumpad\")"
     ]
   }
 }

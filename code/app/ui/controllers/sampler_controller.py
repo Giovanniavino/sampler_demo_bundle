@@ -352,8 +352,6 @@ class SamplerController(QObject):
     playerStateChanged          = pyqtSignal()
     sequenceUpdated             = pyqtSignal()
     bounceStateChanged          = pyqtSignal()
-    looperStateChanged          = pyqtSignal()
-    looperBarsChanged           = pyqtSignal()
     deviceStateChanged          = pyqtSignal()
     # NEW: Stem Browser
     browserStemsChanged         = pyqtSignal()
@@ -458,15 +456,6 @@ class SamplerController(QObject):
         self._pad_fx: dict[int, dict] = {}
         self._master_fx: dict = _default_fx_state()
         self._pending_bounce = None       # last live bounce, awaiting save
-        # NEW: per-track looper mirror (updated by the position-timer poll).
-        self._looper_bars: int = 4
-        self._loop_preroll_ms: float = 40.0   # see engine.set_loop_preroll_ms
-        self._looper_states: list[str] = ["idle"] * 4
-        self._looper_positions: list[float] = [0.0] * 4
-        self._looper_undo_available: list[bool] = [False] * 4
-        self._track_armed_record: list[bool] = [False] * 4
-        self._track_armed_overdub: list[bool] = [False] * 4
-        self._last_modified_track: int = 0
 
         # NEW: virtual hardware device sync (see app.hardware.virtual_device).
         self._device_manager = DeviceManager(cache_dir=cache_dir, parent=self)
@@ -995,25 +984,6 @@ class SamplerController(QObject):
             self._pad_model.set_active(idx, False)
         self._active_pads_state = active_now
 
-        # Mirror the engine's per-track looper state on the UI thread so
-        # QML can react via notify signals.
-        eng = getattr(self, "engine", None)
-        if eng is not None:
-            changed = False
-            for i in range(4):
-                new_state = eng.looper_track_state(i)
-                new_pos = eng.looper_track_position(i)
-                new_undo = eng.looper_track_has_undo(i)
-                if (new_state != self._looper_states[i]
-                        or abs(new_pos - self._looper_positions[i]) > 0.005
-                        or new_undo != self._looper_undo_available[i]):
-                    self._looper_states[i] = new_state
-                    self._looper_positions[i] = new_pos
-                    self._looper_undo_available[i] = new_undo
-                    changed = True
-            if changed:
-                self.looperStateChanged.emit()
-
     @pyqtProperty(list, notify=currentSampleChanged)
     def currentSampleBeats(self):
         """Beat positions as fractions of the VIEW WINDOW (for grid overlay)."""
@@ -1160,7 +1130,7 @@ class SamplerController(QObject):
     def detectMidiKeyboards(self):
         """Auto-detect connected MIDI keyboards."""
         try:
-            from app.hardware.midi.detector import detect_keyboards
+            from app.hardware.midi.midi_detector import detect_keyboards
             keyboards = detect_keyboards(probe_seconds=0.5)
             self._midi_keyboards = [
                 {
@@ -2069,18 +2039,6 @@ class SamplerController(QObject):
         self._current_beat = int(beat_index)
         self._is_downbeat = bool(is_downbeat)
         self.beatTick.emit(self._current_beat, self._is_downbeat)
-        # On the downbeat, fire any armed loop track (record or overdub)
-        # so the take always lands on a bar boundary.
-        if is_downbeat:
-            for i in range(4):
-                if self._track_armed_record[i]:
-                    self.engine.looper_start_record(i)
-                    self._track_armed_record[i] = False
-                    self._last_modified_track = i
-                elif self._track_armed_overdub[i]:
-                    self.engine.looper_start_overdub(i)
-                    self._track_armed_overdub[i] = False
-                    self._last_modified_track = i
 
     def _on_count_in_done(self):
         # Count-in finished: stop metronome (unless user wanted it on)
@@ -3140,137 +3098,6 @@ class SamplerController(QObject):
             self._set_status(f"Auto loop sync: {suggested} beats")
             self.currentSampleChanged.emit()
             self.editorParamsChanged.emit()
-
-    # ===================================================================
-    # NEW: Bar-locked looper (captures master, replays in tempo)
-    # ===================================================================
-
-    @pyqtProperty(int, notify=looperBarsChanged)
-    def looperBars(self):
-        return self._looper_bars
-
-    @pyqtProperty(list, notify=looperStateChanged)
-    def looperStates(self):
-        return list(self._looper_states)
-
-    @pyqtProperty(list, notify=looperStateChanged)
-    def looperPositionFracs(self):
-        return list(self._looper_positions)
-
-    @pyqtProperty(list, notify=looperStateChanged)
-    def looperUndoAvailable(self):
-        return list(self._looper_undo_available)
-
-    @pyqtSlot(int)
-    def setLooperBars(self, n: int):
-        n = max(1, min(32, int(n)))
-        if n == self._looper_bars:
-            return
-        self._looper_bars = n
-        self.looperBarsChanged.emit()
-
-    @pyqtProperty(float, notify=looperBarsChanged)
-    def loopPrerollMs(self):
-        return self._loop_preroll_ms
-
-    @pyqtSlot(float)
-    def setLoopPrerollMs(self, ms: float):
-        """Compensation for trigger latency: how many ms of recent master
-        history to splice into the loop's start when recording fires."""
-        ms = max(0.0, min(100.0, float(ms)))
-        if abs(ms - self._loop_preroll_ms) < 0.5:
-            return
-        self._loop_preroll_ms = ms
-        eng = getattr(self, "engine", None)
-        if eng is not None:
-            eng.set_loop_preroll_ms(ms)
-        self.looperBarsChanged.emit()
-
-    def _ensure_metronome_for_loop(self) -> bool:
-        """Make sure metronome + BPM are usable before arming a loop track."""
-        bpm = self._effective_bpm()
-        if bpm <= 0:
-            self._set_status("Looper needs a BPM — load a track first")
-            return False
-        if not self._metronome.enabled:
-            self._metronome.set_bpm(bpm)
-            self._metronome.start()
-            self.metronomeStateChanged.emit()
-        self.engine.looper_configure(self._looper_bars, bpm, 4)
-        return True
-
-    @pyqtSlot(int)
-    def toggleLooperTrack(self, idx: int):
-        """One-tap cycle on a single track's button.
-
-        - idle           -> arm record (fires on next downbeat)
-        - playing        -> arm overdub (adds a layer on next downbeat)
-        - overdub        -> stop overdub (keep the layer just added)
-        - armed_*        -> cancel
-        - recording      -> cancel (drop the partial take)
-        """
-        if not (0 <= idx < 4):
-            return
-        state = self._looper_states[idx]
-        if state == "idle":
-            if not self._ensure_metronome_for_loop():
-                return
-            self.engine.looper_arm_record(idx)
-            self._track_armed_record[idx] = True
-            self._track_armed_overdub[idx] = False
-            self._set_status(
-                f"T{idx + 1}: armed record — {self._looper_bars} bar(s)")
-        elif state == "playing":
-            if not self._ensure_metronome_for_loop():
-                return
-            self.engine.looper_arm_overdub(idx)
-            self._track_armed_overdub[idx] = True
-            self._track_armed_record[idx] = False
-            self._set_status(f"T{idx + 1}: armed overdub")
-        elif state == "overdub":
-            self.engine.looper_stop_overdub(idx)
-            self._last_modified_track = idx
-            self._set_status(f"T{idx + 1}: overdub stopped")
-        elif state in ("armed_record", "armed_overdub", "recording"):
-            self.engine.looper_cancel(idx)
-            self._track_armed_record[idx] = False
-            self._track_armed_overdub[idx] = False
-            self._set_status(f"T{idx + 1}: cancelled")
-
-    @pyqtSlot(int)
-    def armLooperRecord(self, idx: int):
-        """Explicit re-record: arms RECORD on a track (will overwrite)."""
-        if not (0 <= idx < 4):
-            return
-        if not self._ensure_metronome_for_loop():
-            return
-        self.engine.looper_arm_record(idx)
-        self._track_armed_record[idx] = True
-        self._track_armed_overdub[idx] = False
-        self._set_status(
-            f"T{idx + 1}: re-record armed — {self._looper_bars} bar(s)")
-
-    @pyqtSlot(int)
-    def clearLooperTrack(self, idx: int):
-        if not (0 <= idx < 4):
-            return
-        self.engine.looper_clear(idx)
-        self._track_armed_record[idx] = False
-        self._track_armed_overdub[idx] = False
-        self._set_status(f"T{idx + 1}: cleared")
-
-    @pyqtSlot(int)
-    def undoLooperTrack(self, idx: int):
-        if not (0 <= idx < 4):
-            return
-        self.engine.looper_undo(idx)
-        self._last_modified_track = idx
-        self._set_status(f"T{idx + 1}: undo")
-
-    @pyqtSlot()
-    def undoLooperLast(self):
-        """Undo on the most recently modified track (last take / overdub)."""
-        self.undoLooperTrack(self._last_modified_track)
 
     def _on_import_error(self, msg: str):
         self._set_status(f"Error: {msg}")
