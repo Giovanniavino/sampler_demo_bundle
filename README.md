@@ -148,7 +148,6 @@ code/
 | **3** — MK1 PC-connected | Sync USB con frontend Python per import/editing | TBD |
 | **4** — Polish & beta | Calibrazione velocity reale, beta su utenti finali | TBD |
 
-Niente date inventate. **Quando è pronto, è pronto.**
 
 ---
 
@@ -164,7 +163,7 @@ Niente date inventate. **Quando è pronto, è pronto.**
 
 ## Filosofia
 
-Niente feature creep. Niente "aggiungo X perché è facile". Ogni pezzo nel firmware finale deve **suonare bene** prima ancora di esistere come codice. Se ho un dubbio sull'audio, non lo metto.
+Niente feature creep. Ogni pezzo nel firmware finale deve **suonare bene** prima ancora di esistere come codice. Se ho un dubbio sull'audio, non lo metto.
 
 > *"Make it work. Make it right. Make it fast."* — Kent Beck
 
@@ -172,7 +171,7 @@ Il prototipo Python qui dentro è la fase "make it work". Il salto a C + hardwar
 
 ---
 
-## Cosa NON c'è (e non ci sarà nel prototipo Python)
+## Cosa NON c'è (e non so se ci sarà nel prototipo Python)
 
 Per scelta esplicita, queste cose sono **rinviate** all'hardware o cancellate del tutto:
 
@@ -183,12 +182,6 @@ Per scelta esplicita, queste cose sono **rinviate** all'hardware o cancellate de
 - ❌ Collaboration cloud — no.
 
 Il prototipo Python serve a una cosa: **dimostrare la storia** (separa → suona → salva su device). Tutto il resto è rumore.
-
----
-
-## Licenza
-
-MIT.
 
 ---
 
