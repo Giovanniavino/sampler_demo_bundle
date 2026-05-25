@@ -4,7 +4,7 @@
 
 Un sampler/drumpad con separazione AI integrata, scritto in Python come **prototipo software** del futuro hardware **TPmix MK1**.
 
-![Hardware TPmix MK1 — top view](docs/images/hardware-mockup.png)
+<img src="docs/images/hardware-mockup.png" width="500" alt="Hardware TPmix MK1 — top view"/>
 
 > **TPmix MK1** — 340 × 196 × 38 mm · case in alluminio cream · 5" LCD 800×480 · 4×4 pad RGB in silicone · fader 60 mm con VU 8-LED · 4 encoder endless push · ribbon 16-LED · USB-C + MIDI + slot SD · monitor speaker integrato.
 
@@ -29,7 +29,7 @@ Quando torna, torna come **prodotto vero**. Non come un'altra app Python qualsia
 
 ## Come dovrebbe sentirsi — UI target
 
-![UI mockups](docs/images/ui-mockups.png)
+<img src="docs/images/ui-mockups.png" width="500" alt="UI mockups"/>
 
 Quattro schermate principali del software finale:
 
